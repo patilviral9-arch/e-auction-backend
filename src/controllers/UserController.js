@@ -1,0 +1,220 @@
+const userschema  = require('../models/Usermodel');
+const bcrypt       = require("bcrypt");
+const mailSend     = require('../utils/Mailutil');
+const sendResetMail = require('../utils/ResetMailutil');
+const jwt          = require("jsonwebtoken");
+const secret       = process.env.JWT_SECRET_KEY;
+
+// ── In-memory OTP store  { email → { otp, expiresAt } } ─────────────────────
+// For production swap this with Redis or a DB collection
+const otpStore = new Map();
+
+// ── Helper: generate a 6-digit OTP ───────────────────────────────────────────
+const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// ── POST /user/send-otp ───────────────────────────────────────────────────────
+// Called by Signup before showing the OTP modal.
+// Generates a fresh OTP, stores it for 10 minutes, and emails it.
+const sendOtp = async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required." });
+
+    try {
+        // Prevent duplicate accounts
+        const existing = await userschema.findOne({ email: email.toLowerCase().trim() });
+        if (existing) {
+            return res.status(409).json({ message: "An account with this email already exists." });
+        }
+
+        const otp       = generateOtp();
+        const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+        otpStore.set(email.toLowerCase(), { otp, expiresAt });
+
+        // Send the OTP email using your existing Mailutil
+        // Pass type "otp" — add a matching template to Mailutil (see note below)
+        await mailSend(email, "Your E-Auction Verification Code", otp, "otp");
+
+        res.status(200).json({ message: "OTP sent successfully." });
+    } catch (err) {
+        console.error("sendOtp error:", err);
+        res.status(500).json({ message: "Failed to send OTP.", err: err.message });
+    }
+};
+
+// ── POST /user/verify-otp ─────────────────────────────────────────────────────
+// Called by the OTP modal before registering the user.
+// Returns 200 if valid, 400/410 if wrong or expired.
+const verifyOtp = (req, res) => {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+        return res.status(400).json({ message: "Email and OTP are required." });
+    }
+
+    const record = otpStore.get(email.toLowerCase());
+
+    if (!record) {
+        return res.status(400).json({ message: "No OTP found for this email. Please request a new one." });
+    }
+
+    if (Date.now() > record.expiresAt) {
+        otpStore.delete(email.toLowerCase());
+        return res.status(410).json({ message: "OTP has expired. Please request a new one." });
+    }
+
+    if (record.otp !== otp.toString()) {
+        return res.status(400).json({ message: "Incorrect OTP. Please try again." });
+    }
+
+    // OTP is valid — remove it so it can't be reused
+    otpStore.delete(email.toLowerCase());
+
+    res.status(200).json({ message: "OTP verified successfully." });
+};
+
+// ── POST /user/register ───────────────────────────────────────────────────────
+const registerUser = async (req, res) => {
+    try {
+        if (!req.body || !req.body.password) {
+            return res.status(400).json({ message: "Password is required to create an account." });
+        }
+
+        const hashedPassword = await bcrypt.hash(req.body.password, 10);
+        const savedUser      = await userschema.create({ ...req.body, password: hashedPassword });
+
+        res.status(201).json({ message: "User created successfully", data: savedUser });
+
+        const displayName = savedUser.role === 'business'
+            ? savedUser.businessName
+            : savedUser.firstName;
+
+        try {
+            await mailSend(savedUser.email, "Welcome to E-Auction!", displayName, "welcome");
+        } catch (mailError) {
+            console.error("Welcome mail failed:", mailError);
+        }
+
+    } catch (err) {
+        console.error("Mongoose Error:", err);
+        res.status(500).json({ message: "Error while creating user", err: err.message });
+    }
+};
+
+// ── POST /user/login ──────────────────────────────────────────────────────────
+const loginUser = async (req, res) => {
+    const { email, password } = req.body;
+    const founduserfromemail  = await userschema.findOne({ email });
+
+    if (founduserfromemail) {
+        const ispasswordmatched = await bcrypt.compare(password, founduserfromemail.password);
+        if (ispasswordmatched) {
+            const token = jwt.sign(founduserfromemail.toObject(), secret);
+            res.status(200).json({
+                message: "Login success",
+                token,
+                data: founduserfromemail,
+                role: founduserfromemail.role,
+            });
+        } else {
+            res.status(401).json({ message: "Invalid credentials" });
+        }
+    } else {
+        res.status(404).json({ message: "User not found" });
+    }
+};
+
+// ── GET /user/getusers ────────────────────────────────────────────────────────
+const getallusers = async (req, res) => {
+    try {
+        const allusers = await userschema.find();
+        res.status(200).json({ message: "All users", data: allusers });
+    } catch (err) {
+        res.status(500).json({ message: "Error while fetching users", err: err.message });
+    }
+};
+
+// ── PUT /user/updateuser/:id ──────────────────────────────────────────────────
+const updateUser = async (req, res) => {
+    try {
+        const updatedusers = await userschema.findByIdAndUpdate(
+            req.params.id,
+            { $set: req.body },
+            { new: true }
+        );
+        res.status(200).json({ message: "User updated successfully", data: updatedusers });
+    } catch (err) {
+        res.status(500).json({ message: "Error while updating user", err: err.message });
+    }
+};
+
+// ── DELETE /user/deleteuser/:id ───────────────────────────────────────────────
+const deleteUser = async (req, res) => {
+    try {
+        const deltedusers = await userschema.findByIdAndDelete(req.params.id);
+        res.status(200).json({ message: "User deleted successfully", data: deltedusers });
+    } catch (err) {
+        res.status(500).json({ message: "Error while deleting user" });
+    }
+};
+
+// ── GET /user/getuser/:id ─────────────────────────────────────────────────────
+const getUser = async (req, res) => {
+    try {
+        const user = await userschema.findById(req.params.id);
+        res.status(200).json({ message: "User found", data: user });
+    } catch (err) {
+        res.status(500).json({ message: "Error fetching user", err: err.message });
+    }
+};
+
+// ── POST /user/forgetpassword ─────────────────────────────────────────────────
+const forgotPassword = async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is not provided." });
+
+    try {
+        const foundUserFromEmail = await userschema.findOne({ email });
+        if (!foundUserFromEmail) return res.status(404).json({ message: "User not found." });
+
+        const token = jwt.sign(
+            { _id: foundUserFromEmail._id, email: foundUserFromEmail.email },
+            secret,
+            { expiresIn: "15m" }
+        );
+
+        const resetUrl = `http://localhost:5173/resetpassword/${token}`;
+        await sendResetMail(foundUserFromEmail.email, resetUrl);
+
+        res.status(200).json({ message: "Reset link has been sent to your email." });
+    } catch (err) {
+        console.error("Forgot password error:", err);
+        res.status(500).json({ message: "Server error.", err: err.message });
+    }
+};
+
+// ── PUT /user/resetpassword ───────────────────────────────────────────────────
+const resetPassword = async (req, res) => {
+    const { newPassword, token } = req.body;
+    try {
+        const decodedUser    = jwt.verify(token, secret);
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        await userschema.findByIdAndUpdate(decodedUser._id, { password: hashedPassword });
+        res.status(200).json({ message: "Password reset successfully!" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error.", err });
+    }
+};
+
+module.exports = {
+    sendOtp,
+    verifyOtp,
+    registerUser,
+    loginUser,
+    getallusers,
+    updateUser,
+    deleteUser,
+    getUser,
+    forgotPassword,
+    resetPassword,
+};
