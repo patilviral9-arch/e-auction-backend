@@ -1,6 +1,7 @@
 const Notification = require("../models/NotificationModel");
-const Auction      = require("../models/AuctionModel");
-const Wishlist     = require("../models/WishlistModel"); // adjust path if needed
+const AuctionResult = require("../models/AuctionResultModel");
+const Auction       = require("../models/AuctionModel"); // adjust path if needed
+const Wishlist      = require("../models/WishlistModel")
 
 // ── Milestone config ──────────────────────────────────────────────────────────
 const WINDOW_MS        = 20 * 60 * 1000; // 20-min window around each milestone
@@ -18,7 +19,7 @@ const buildMessage = (type, auctionTitle) => {
         starting_2h: `🔔 "${t}" starts in ~2 hours. Prepare your bid strategy!`,
         starting_1h: `🟢 "${t}" is starting in ~1 hour! Make sure you're ready.`,
         starting:    `🟢 "${t}" has just started! Place your bid now.`,
-        won:         `🏆 Congratulations! You won "${t}". Complete your payment to claim it.`,
+        won:         `🏆 Congratulations! You won "${t}". Please complete your payment within 24 hours to secure your item.`,
     };
     return map[type] || `Notification about "${t}"`;
 };
@@ -161,10 +162,11 @@ const getNotifications = async (req, res) => {
             _id:       n._id,
             type:      n.type,
             isRead:    n.isRead,
+            body:      n.message,   // frontend reads n.body ?? n.message
             message:   n.message,
             createdAt: n.createdAt,
-            auction:   n.auctionId,
-            result:    n.auctionResultId,
+            auction:   n.auctionId,   // populated Auction doc
+            result:    n.auctionResultId, // populated AuctionResult doc (has winningBid)
         }));
 
         res.json({ notifications: shaped });

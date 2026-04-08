@@ -68,7 +68,7 @@ const notificationSchema = new mongoose.Schema(
 // ── Indexes ───────────────────────────────────────────────────────────────────
 notificationSchema.index({ userId: 1, isRead: 1 });
 notificationSchema.index({ userId: 1, createdAt: -1 });
-notificationSchema.index({ dedupeKey: 1 }, { unique: true });
+
 
 // ── Auto-delete notifications older than 7 days ───────────────────────────────
 notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });

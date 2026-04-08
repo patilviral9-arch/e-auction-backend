@@ -1,9 +1,16 @@
-const router = require("express").Router()
-const resultController = require("../controllers/AuctionResultController")
+const router             = require("express").Router();
+const resultController   = require("../controllers/AuctionResultController");
 
-router.post("/auction",resultController.createResult)
-router.get("/auctions",resultController.getResults)
-router.put("/auction/:id",resultController.updateAuction)
-router.delete("/auction/:id",resultController.deleteAuction)
+// Create a new auction result (called automatically when a winner is determined)
+router.post("/auction", resultController.createAuctionResult);
 
-module.exports = router
+// List all auction results (admin)
+router.get("/auctions", resultController.getResults);
+
+// All results for a specific winner — used by WonAuctions page
+router.get("/auctions/winner/:userId", resultController.getResultsByWinner);
+
+// Delete a result (admin)
+router.delete("/auction/:id", resultController.deleteAuctionResult);
+
+module.exports = router;

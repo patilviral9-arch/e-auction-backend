@@ -1,10 +1,10 @@
 const Notification = require("../models/NotificationModel");
-const Auction      = require("../models/AuctionModel");
-const Wishlist     = require("../models/WishlistModel");   // adjust path if needed
-const AuctionResult = require("../models/AuctionResultModel"); // adjust path if needed
+const AuctionResult = require("../models/AuctionResultModel");
+const Auction       = require("../models/AuctionModel"); // adjust path if needed
+const Wishlist      = require("../models/WishlistModel")
 
-// ── Milestone config (must match frontend) ────────────────────────────────────
-const WINDOW_MS        = 20 * 60 * 1000; // ±20 min window per milestone
+// ── Milestone config ──────────────────────────────────────────────────────────
+const WINDOW_MS        = 20 * 60 * 1000; // 20-min window around each milestone
 const END_MILESTONES   = [3, 2, 1];      // hours before endTime
 const START_MILESTONES = [3, 2, 1];      // hours before startDate
 
@@ -19,98 +19,127 @@ const buildMessage = (type, auctionTitle) => {
         starting_2h: `🔔 "${t}" starts in ~2 hours. Prepare your bid strategy!`,
         starting_1h: `🟢 "${t}" is starting in ~1 hour! Make sure you're ready.`,
         starting:    `🟢 "${t}" has just started! Place your bid now.`,
-        won:         `🏆 Congratulations! You won "${t}". Complete your payment to claim it.`,
+        won:         `🏆 Congratulations! You won "${t}". Please complete your payment within 24 hours to secure your item.`,
     };
     return map[type] || `Notification about "${t}"`;
 };
 
-// ── Helper: safely create notification (skip if duplicate) ────────────────────
+// ── Safely create — skip silently if dedupeKey already exists ─────────────────
 const createIfNew = async (userId, auctionId, type, message, auctionResultId = null) => {
-    const dedupeKey = `${type}-${userId}-${auctionId}`;
+    const dedupeKey = `${type}-${String(userId)}-${String(auctionId)}`;
     try {
         await Notification.create({ userId, auctionId, type, message, dedupeKey, auctionResultId });
-        return true; // created
+        return true;
     } catch (err) {
-        if (err.code === 11000) return false; // duplicate — already sent
+        if (err.code === 11000) return false; // duplicate — already sent, skip
         throw err;
     }
 };
 
+// ── Check milestones for one auction + one user ───────────────────────────────
+const processAuction = async (userId, auction, now, counter) => {
+    const start = new Date(auction.startDate).getTime();
+    const end   = new Date(auction.endTime).getTime();
+
+    // ENDING milestones — only when Active and not yet ended
+    if (auction.status === "Active" && end > now) {
+        for (const hrs of END_MILESTONES) {
+            const milestoneMs = hrs * 60 * 60 * 1000;
+            const timeLeft    = end - now;
+            if (timeLeft >= milestoneMs - WINDOW_MS && timeLeft <= milestoneMs + WINDOW_MS) {
+                const ok = await createIfNew(userId, auction._id, `ending_${hrs}h`, buildMessage(`ending_${hrs}h`, auction.title));
+                if (ok) counter.count++;
+            }
+        }
+    }
+
+    // STARTING milestones — only when Scheduled and not yet started
+    if (auction.status === "Scheduled" && start > now) {
+        for (const hrs of START_MILESTONES) {
+            const milestoneMs = hrs * 60 * 60 * 1000;
+            const timeToStart = start - now;
+            if (timeToStart >= milestoneMs - WINDOW_MS && timeToStart <= milestoneMs + WINDOW_MS) {
+                const ok = await createIfNew(userId, auction._id, `starting_${hrs}h`, buildMessage(`starting_${hrs}h`, auction.title));
+                if (ok) counter.count++;
+            }
+        }
+    }
+
+    // JUST STARTED — fired once within 30 min of startDate
+    if (auction.status === "Active" && now - start >= 0 && now - start < 30 * 60 * 1000) {
+        const ok = await createIfNew(userId, auction._id, "starting", buildMessage("starting", auction.title));
+        if (ok) counter.count++;
+    }
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SCHEDULER — called by AuctionScheduler every 30s
-//  Generates milestone notifications for all wishlisted auctions
+//  SCHEDULER HOOK — called by AuctionScheduler every 30s
 // ═══════════════════════════════════════════════════════════════════════════════
 const generateMilestoneNotifications = async () => {
-    const now = Date.now();
-    let created = 0;
+    const now     = Date.now();
+    const counter = { count: 0 };
 
     try {
-        // Get all wishlist entries with populated auction
-        const wishlists = await Wishlist.find({}).populate("auction");
+        // Step 1 — get all wishlist docs as plain objects (no populate)
+        const wishlists = await Wishlist.find({}).lean();
 
-        for (const entry of wishlists) {
-            const auction = entry.auction;
-            const userId  = entry.userId ?? entry.user;
+        if (!wishlists.length) return;
 
-            if (!auction || !userId) continue;
+        // Step 2 — collect every unique auctionId across all wishlists
+        // Handles both: { auctions: [ObjectId] }  and  { auctionId: ObjectId }
+        const auctionIdSet = new Set();
+        for (const w of wishlists) {
+            const raw = w.auctions ?? w.auctionId ?? w.auction ?? [];
+            const arr = Array.isArray(raw) ? raw : [raw];
+            arr.forEach(id => id && auctionIdSet.add(String(id)));
+        }
 
-            const start = new Date(auction.startDate).getTime();
-            const end   = new Date(auction.endTime).getTime();
+        if (!auctionIdSet.size) return;
 
-            // ── ENDING milestones (auction must be Active) ──────────────────────
-            if (auction.status === "Active" && end > now) {
-                for (const hrs of END_MILESTONES) {
-                    const milestoneMs = hrs * 60 * 60 * 1000;
-                    const timeLeft    = end - now;
-                    if (timeLeft >= milestoneMs - WINDOW_MS && timeLeft <= milestoneMs + WINDOW_MS) {
-                        const type    = `ending_${hrs}h`;
-                        const message = buildMessage(type, auction.title);
-                        const ok = await createIfNew(userId, auction._id, type, message);
-                        if (ok) created++;
-                    }
-                }
-            }
+        // Step 3 — fetch only Active/Scheduled auctions in one DB call
+        const auctions = await Auction.find({
+            _id:    { $in: [...auctionIdSet] },
+            status: { $in: ["Active", "Scheduled"] },
+        }).lean();
 
-            // ── STARTING milestones (auction must be Scheduled) ─────────────────
-            if (auction.status === "Scheduled" && start > now) {
-                for (const hrs of START_MILESTONES) {
-                    const milestoneMs = hrs * 60 * 60 * 1000;
-                    const timeToStart = start - now;
-                    if (timeToStart >= milestoneMs - WINDOW_MS && timeToStart <= milestoneMs + WINDOW_MS) {
-                        const type    = `starting_${hrs}h`;
-                        const message = buildMessage(type, auction.title);
-                        const ok = await createIfNew(userId, auction._id, type, message);
-                        if (ok) created++;
-                    }
-                }
-            }
+        // Build quick lookup map
+        const auctionMap = {};
+        auctions.forEach(a => { auctionMap[String(a._id)] = a; });
 
-            // ── JUST STARTED (within last 30 min) ──────────────────────────────
-            if (auction.status === "Active" && now - start >= 0 && now - start < 30 * 60 * 1000) {
-                const type    = "starting";
-                const message = buildMessage(type, auction.title);
-                const ok = await createIfNew(userId, auction._id, type, message);
-                if (ok) created++;
+        // Step 4 — for each wishlist user, process each of their auctions
+        for (const w of wishlists) {
+            // Support both "userId" and "user" field name
+            const userId = w.userId ?? w.user;
+            if (!userId) continue;
+
+            const raw = w.auctions ?? w.auctionId ?? w.auction ?? [];
+            const arr = Array.isArray(raw) ? raw : [raw];
+
+            for (const rawId of arr) {
+                if (!rawId) continue;
+                const auction = auctionMap[String(rawId)];
+                if (!auction) continue; // Completed/Cancelled — skip
+                await processAuction(userId, auction, now, counter);
             }
         }
 
-        if (created > 0) {
-            console.log(`[NotificationController] 🔔 ${created} new milestone notification(s) created`);
+        if (counter.count > 0) {
+            console.log(`[NotificationController] 🔔 ${counter.count} new notification(s) created`);
         }
+
     } catch (err) {
         console.error("[NotificationController] ❌ generateMilestoneNotifications error:", err.message);
     }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  SCHEDULER — called when an auction result is saved (user wins)
+//  WON NOTIFICATION — call from AuctionResultController when winner is saved
 // ═══════════════════════════════════════════════════════════════════════════════
 const createWonNotification = async (userId, auctionId, auctionResultId) => {
     try {
-        const auction = await Auction.findById(auctionId);
-        const message = buildMessage("won", auction?.title);
-        await createIfNew(userId, auctionId, "won", message, auctionResultId);
-        console.log(`[NotificationController] 🏆 Won notification created for user ${userId}`);
+        const auction = await Auction.findById(auctionId).lean();
+        await createIfNew(userId, auctionId, "won", buildMessage("won", auction?.title), auctionResultId);
+        console.log(`[NotificationController] 🏆 Won notification → user ${userId}`);
     } catch (err) {
         console.error("[NotificationController] ❌ createWonNotification error:", err.message);
     }
@@ -121,7 +150,6 @@ const createWonNotification = async (userId, auctionId, auctionResultId) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /notification/:userId
-// Returns all notifications for a user, newest first
 const getNotifications = async (req, res) => {
     try {
         const notifications = await Notification.find({ userId: req.params.userId })
@@ -130,16 +158,14 @@ const getNotifications = async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(100);
 
-        // Shape the response to match what the frontend expects
-        const shaped = notifications.map((n) => ({
-            _id:             n._id,
-            type:            n.type,
-            isRead:          n.isRead,
-            message:         n.message,
-            createdAt:       n.createdAt,
-            auction:         n.auctionId,        // populated auction object
-            result:          n.auctionResultId,  // populated result or null
-            dedupeKey:       n.dedupeKey,
+        const shaped = notifications.map(n => ({
+            _id:       n._id,
+            type:      n.type,
+            isRead:    n.isRead,
+            message:   n.message,
+            createdAt: n.createdAt,
+            auction:   n.auctionId,
+            result:    n.auctionResultId,
         }));
 
         res.json({ notifications: shaped });
@@ -149,13 +175,9 @@ const getNotifications = async (req, res) => {
 };
 
 // GET /notification/:userId/unread-count
-// Returns just the unread count (for navbar bell badge)
 const getUnreadCount = async (req, res) => {
     try {
-        const count = await Notification.countDocuments({
-            userId: req.params.userId,
-            isRead: false,
-        });
+        const count = await Notification.countDocuments({ userId: req.params.userId, isRead: false });
         res.json({ count });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -163,23 +185,17 @@ const getUnreadCount = async (req, res) => {
 };
 
 // PATCH /notification/:id/read
-// Mark a single notification as read
 const markAsRead = async (req, res) => {
     try {
-        const notification = await Notification.findByIdAndUpdate(
-            req.params.id,
-            { isRead: true },
-            { new: true }
-        );
-        if (!notification) return res.status(404).json({ error: "Notification not found" });
-        res.json({ message: "Marked as read", data: notification });
+        const n = await Notification.findByIdAndUpdate(req.params.id, { isRead: true }, { new: true });
+        if (!n) return res.status(404).json({ error: "Not found" });
+        res.json({ message: "Marked as read", data: n });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
 // PATCH /notification/:userId/read-all
-// Mark ALL notifications for a user as read
 const markAllAsRead = async (req, res) => {
     try {
         const result = await Notification.updateMany(
@@ -193,33 +209,28 @@ const markAllAsRead = async (req, res) => {
 };
 
 // DELETE /notification/:id
-// Delete a single notification
 const deleteNotification = async (req, res) => {
     try {
         await Notification.findByIdAndDelete(req.params.id);
-        res.json({ message: "Notification deleted" });
+        res.json({ message: "Deleted" });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
 // DELETE /notification/:userId/clear-all
-// Delete all notifications for a user
 const clearAllNotifications = async (req, res) => {
     try {
         const result = await Notification.deleteMany({ userId: req.params.userId });
-        res.json({ message: "All notifications cleared", deleted: result.deletedCount });
+        res.json({ message: "Cleared", deleted: result.deletedCount });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 };
 
 module.exports = {
-    // Scheduler hooks (called internally, not via REST)
     generateMilestoneNotifications,
     createWonNotification,
-
-    // REST handlers
     getNotifications,
     getUnreadCount,
     markAsRead,

@@ -103,24 +103,36 @@ const registerUser = async (req, res) => {
 // ── POST /user/login ──────────────────────────────────────────────────────────
 const loginUser = async (req, res) => {
     const { email, password } = req.body;
-    const founduserfromemail  = await userschema.findOne({ email });
+    const normalizedEmail = String(email || "").toLowerCase().trim();
+    const founduserfromemail = await userschema.findOne({ email: normalizedEmail });
 
-    if (founduserfromemail) {
-        const ispasswordmatched = await bcrypt.compare(password, founduserfromemail.password);
-        if (ispasswordmatched) {
-            const token = jwt.sign(founduserfromemail.toObject(), secret);
-            res.status(200).json({
-                message: "Login success",
-                token,
-                data: founduserfromemail,
-                role: founduserfromemail.role,
-            });
-        } else {
-            res.status(401).json({ message: "Invalid credentials" });
-        }
-    } else {
-        res.status(404).json({ message: "User not found" });
+    if (!founduserfromemail) {
+        return res.status(404).json({ message: "User not found" });
     }
+
+    const status = String(founduserfromemail.status || "").toLowerCase();
+    if (status === "inactive" || status === "deactive") {
+        return res.status(403).json({ message: "Your account is deactivated. Please contact admin." });
+    }
+    if (status === "blocked" || status === "suspended") {
+        return res.status(403).json({ message: "Your account is suspended. Please contact admin." });
+    }
+    if (status === "deleted") {
+        return res.status(403).json({ message: "Your account is unavailable. Please contact admin." });
+    }
+
+    const ispasswordmatched = await bcrypt.compare(password, founduserfromemail.password);
+    if (ispasswordmatched) {
+        const token = jwt.sign(founduserfromemail.toObject(), secret);
+        return res.status(200).json({
+            message: "Login success",
+            token,
+            data: founduserfromemail,
+            role: founduserfromemail.role,
+        });
+    }
+
+    return res.status(401).json({ message: "Invalid credentials" });
 };
 
 // ── GET /user/getusers ────────────────────────────────────────────────────────

@@ -1,28 +1,80 @@
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
 
-const auctionResultSchema = new mongoose.Schema({
-
-    product:{
-        type:mongoose.Schema.Types.ObjectId,
-        ref:"Product"
+const auctionResultSchema = new mongoose.Schema(
+  {
+    auction: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Auction",
+      required: true,
     },
 
-    winner:{
-        type:mongoose.Schema.Types.ObjectId,
-        ref:"User"
+    winner: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
     },
 
-    winningBid:{
-        type:Number
+    // ✅ Seller reference — populated from auction.createdBy at result creation time
+    seller: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
 
-    status:{
-        type:String,
-        default:"Pending"
-    }
+    // Denormalized snapshots — set at creation time for fast display
 
-},{
-    timestamps:true
-})
+    // Winner display name:
+    //   personal role → "firstName lastName"
+    //   business role → businessName
+    winnerName: {
+      type: String,
+      default: "",
+    },
 
-module.exports = mongoose.model("AuctionResult",auctionResultSchema)
+    // Seller name — taken from the auction's createdBy user doc
+    sellerName: {
+      type: String,
+      default: "",
+    },
+
+    auctionTitle: {
+      type: String,
+      default: "",
+    },
+
+    winningBid: {
+      type: Number,
+      required: true,
+    },
+
+    paymentStatus: {
+      type: String,
+      enum: ["Pending", "Paid", "Failed"],
+      default: "Pending",
+    },
+
+    paymentMethod: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    paymentId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    paidAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// Prevent duplicate results for the same auction
+auctionResultSchema.index({ auction: 1 }, { unique: true });
+
+module.exports = mongoose.model("AuctionResult", auctionResultSchema);

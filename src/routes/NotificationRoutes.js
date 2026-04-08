@@ -2,24 +2,22 @@ const router = require("express").Router();
 const notificationController = require("../controllers/NotificationController");
 
 // ── GET ───────────────────────────────────────────────────────────────────────
-// All notifications for a user (newest first, limit 100)
-router.get("/:userId", notificationController.getNotifications);
+// ⚠️ Specific paths MUST come before /:userId — otherwise Express matches /:userId first
 
 // Unread count only — used by navbar bell badge
 router.get("/:userId/unread-count", notificationController.getUnreadCount);
 
+// All notifications for a user (newest first, limit 100)
+router.get("/:userId", notificationController.getNotifications);
+
 // ── PATCH ─────────────────────────────────────────────────────────────────────
-// Mark a single notification as read
+// ⚠️ read-all must come before /:id/read
+router.patch("/:userId/read-all", notificationController.markAllAsRead);
 router.patch("/:id/read", notificationController.markAsRead);
 
-// Mark ALL notifications as read for a user
-router.patch("/:userId/read-all", notificationController.markAllAsRead);
-
 // ── DELETE ────────────────────────────────────────────────────────────────────
-// Delete a single notification
-router.delete("/:id", notificationController.deleteNotification);
-
-// Delete ALL notifications for a user
+// ⚠️ clear-all must come before /:id
 router.delete("/:userId/clear-all", notificationController.clearAllNotifications);
+router.delete("/:id", notificationController.deleteNotification);
 
 module.exports = router;

@@ -107,10 +107,20 @@ const deleteBid = async (req, res) => {
         const bid = await Bid.findByIdAndDelete(req.params.id)
         res.status(200).json({ message: "Bid deleted.", data: bid })
     } catch (err) {
-        res.status(500).json({ message: "Error while deleting bid.", err: err.message })  // fixed: was .jsom()
+        res.status(500).json({ message: "Error while deleting bid.", err: err.message })
     }
 }
 
+// ── DELETE all bids for an auction (called when auction is edited) ─────────────
+const deleteByAuction = async (req, res) => {
+    try {
+        const result = await Bid.deleteMany({ auction: req.params.auctionId })
+        console.log(`[deleteByAuction] auctionId=${req.params.auctionId} deleted=${result.deletedCount}`)
+        res.status(200).json({ message: "All bids for auction deleted.", deletedCount: result.deletedCount })
+    } catch (err) {
+        res.status(500).json({ message: "Error deleting bids for auction.", err: err.message })
+    }
+}
 
 // Get all bids placed by a specific bidder (user)
 const getBidsByBidder = async (req, res) => {
@@ -138,5 +148,6 @@ module.exports = {
     getBidsByAuction,
     updateBid,
     deleteBid,
+    deleteByAuction,
     getBidsByBidder
 }

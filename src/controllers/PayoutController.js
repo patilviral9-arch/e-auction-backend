@@ -17,13 +17,24 @@ const getSellerPayout = async (req, res) => {
       payout = await Payout.create({ sellerId: req.params.sellerId });
     }
 
+    // Hide duplicate paid-credit rows for the same auction (legacy duplicates).
+    const seenAuctionCredits = new Set();
+    const dedupedTransactions = (payout.transactions || []).filter((tx) => {
+      const auctionId = tx?.auctionId ? String(tx.auctionId) : "";
+      const isPaidCredit = auctionId && tx?.status === "Paid";
+      if (!isPaidCredit) return true;
+      if (seenAuctionCredits.has(auctionId)) return false;
+      seenAuctionCredits.add(auctionId);
+      return true;
+    });
+
     res.status(200).json({
       message: "Payout data fetched successfully",
       availableBalance: payout.availableBalance,
       pendingAmount:    payout.pendingAmount,
       totalEarned:      payout.totalEarned,
       totalAuctions:    payout.totalAuctions,
-      transactions:     payout.transactions,
+      transactions:     dedupedTransactions,
     });
   } catch (err) {
     res.status(500).json({ message: "Error fetching payout data", err: err.message });
@@ -138,20 +149,21 @@ const setDefaultBank = async (req, res) => {
 // =============================================================================
 // POST /payout/withdraw/:sellerId
 // Initiate a withdrawal
-// Body: { amount, bankId }
+// Body: { amount, bankId, gateway? }
 // =============================================================================
 const withdraw = async (req, res) => {
   try {
     const { amount, bankId } = req.body;
+    const numericAmount = Number(amount);
 
-    if (!amount || amount <= 0) {
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({ message: "Invalid withdrawal amount" });
     }
 
     const payout = await Payout.findOne({ sellerId: req.params.sellerId });
     if (!payout) return res.status(404).json({ message: "Payout wallet not found" });
 
-    if (amount > payout.availableBalance) {
+    if (numericAmount > Number(payout.availableBalance || 0)) {
       return res.status(400).json({ message: "Insufficient balance" });
     }
 
@@ -164,25 +176,24 @@ const withdraw = async (req, res) => {
       return res.status(400).json({ message: "No bank account selected or linked" });
     }
 
-    // Deduct from available, add to pending
-    payout.availableBalance -= amount;
-    payout.pendingAmount    += amount;
+    // Deduct balance immediately and mark as Paid
+    payout.availableBalance -= numericAmount;
 
-    // Create a transaction record
     const newTx = {
       payoutId:     generatePayoutId(),
-      auctionTitle: "Manual Withdrawal",
-      amount,
+      auctionTitle: "Withdrawal",
+      amount:       numericAmount,
       method:       bank.name,
-      status:       "Processing",
+      status:       "Paid",
       date:         new Date(),
     };
-    payout.transactions.unshift(newTx);   // newest first
+    payout.transactions.unshift(newTx);
 
     await payout.save();
 
     res.status(200).json({
-      message: "Withdrawal initiated successfully",
+      ok: true,
+      message: "Withdrawal successful",
       transaction: newTx,
       availableBalance: payout.availableBalance,
       pendingAmount:    payout.pendingAmount,
@@ -200,8 +211,9 @@ const withdraw = async (req, res) => {
 const creditEarning = async (req, res) => {
   try {
     const { auctionId, auctionTitle, amount } = req.body;
+    const numericAmount = Number(amount || 0);
 
-    if (!amount || amount <= 0) {
+    if (!numericAmount || numericAmount <= 0) {
       return res.status(400).json({ message: "Invalid amount" });
     }
 
@@ -210,11 +222,29 @@ const creditEarning = async (req, res) => {
       payout = await Payout.create({ sellerId: req.params.sellerId });
     }
 
-    const platformFee = Math.round(amount * 0.05);   // 5% fee
-    const netAmount   = amount - platformFee;
+    const platformFee = Math.round(numericAmount * 0.05);   // 5% fee
+    const netAmount   = numericAmount - platformFee;
+
+    // Idempotency: avoid double-credit for the same auction.
+    if (auctionId) {
+      const alreadyCredited = payout.transactions.find(
+        (tx) =>
+          tx?.auctionId &&
+          String(tx.auctionId) === String(auctionId) &&
+          tx?.status === "Paid"
+      );
+      if (alreadyCredited) {
+        return res.status(200).json({
+          message: "Earning already credited for this auction",
+          availableBalance: payout.availableBalance,
+          totalEarned: payout.totalEarned,
+          transaction: alreadyCredited,
+        });
+      }
+    }
 
     payout.availableBalance += netAmount;
-    payout.totalEarned      += amount;
+    payout.totalEarned      += numericAmount;
     payout.totalAuctions    += 1;
 
     payout.transactions.unshift({
@@ -225,6 +255,7 @@ const creditEarning = async (req, res) => {
       method:       "Bank Transfer",
       status:       "Paid",
       date:         new Date(),
+      note:         `Gross ₹${numericAmount} − 5% platform fee (₹${platformFee}) = ₹${netAmount} credited`,
     });
 
     await payout.save();
@@ -290,3 +321,4 @@ module.exports = {
   creditEarning,
   updateTransactionStatus,
 };
+
