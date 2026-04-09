@@ -27,6 +27,8 @@ const sendResetMail = async (to, resetUrl) => {
 
   const transporter = mailer.createTransport({
     service: "gmail",
+    family: 4,
+    connectionTimeout: 25000,
     auth: {
       user,
       pass,
