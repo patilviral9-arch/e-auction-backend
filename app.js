@@ -9,10 +9,7 @@ const app = express()
 const cors = require('cors')
 
 app.use(express.json())
-app.use(cors({
-  origin: 'https://e-auction-e617.vercel.app/', // Use your actual Vercel link
-  credentials: true
-}))
+app.use(cors())
 app.use(express.urlencoded({ extended: true }));
 
 const DBconnection = require('./src/utils/DBconnection')
