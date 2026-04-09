@@ -25,17 +25,17 @@ const getTransportConfigs = () => {
     
     return [
         {
-            host: "smtp.gmail.com",
-            port: 587,
-            secure: false, // 🟢 587 must be false
-            family: 4,     // 🟢 CRITICAL: Forces IPv4 to stop the ENETUNREACH error
+            service: "gmail",
+            family: 4, 
             auth: { user, pass },
-            connectionTimeout: 30000, 
-            greetingTimeout: 30000,
-            socketTimeout: 30000,
+            // Use the variables defined at the top of your file
+            connectionTimeout: MAIL_CONNECTION_TIMEOUT_MS, 
+            greetingTimeout: MAIL_GREETING_TIMEOUT_MS,
+            socketTimeout: MAIL_SOCKET_TIMEOUT_MS,
         }
     ];
 };
+
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
 const mailSend = async (to, subject, content, type) => {
