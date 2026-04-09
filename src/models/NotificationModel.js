@@ -21,6 +21,16 @@ const notificationSchema = new mongoose.Schema(
                 "starting_2h",  // wishlisted auction starting in ~2 hours
                 "starting_1h",  // wishlisted auction starting in ~1 hour
                 "starting",     // wishlisted auction just started
+                "starting_24h", // wishlisted scheduled auction starts in ~24 hours
+                "outbid",       // bidder was outbid by another user
+                "lost",         // bidder lost the auction
+                "payment_success", // winner payment succeeded
+                "payment_failed",  // winner payment failed
+                "auction_created", // seller created auction successfully
+                "reserve_reached", // seller reserve price reached
+                "auction_sold",    // seller auction sold successfully
+                "no_bids_or_reserve_not_met", // seller auction not sold
+                "buyer_completed_payment",    // seller notified of buyer payment
                 "won",          // user won an auction — pay now
             ],
             required: true,

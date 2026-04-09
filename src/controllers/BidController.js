@@ -1,5 +1,9 @@
 const Bid = require("../models/BidModel")
 const Auction = require("../models/Auctionmodel")
+const {
+    createOutbidNotification,
+    createReserveReachedNotification,
+} = require("./NotificationController")
 
 const placeBid = async (req, res) => {
     try {
@@ -18,6 +22,10 @@ const placeBid = async (req, res) => {
         // Bid must be higher than current highest bid
         const highestBid = await Bid.findOne({ auction }).sort({ bidAmount: -1 })
         const currentHighest = highestBid ? highestBid.bidAmount : foundAuction.startingBid
+        const previousHighestBidder = highestBid?.bidder ? String(highestBid.bidder) : null
+        const reservePrice = Number(foundAuction.reservePrice || 0)
+        const reserveWasMet = reservePrice > 0 && Number(currentHighest) >= reservePrice
+        const reserveNowMet = reservePrice > 0 && Number(bidAmount) >= reservePrice && !reserveWasMet
 
         if (bidAmount <= currentHighest) {
             return res.status(400).json({
@@ -48,6 +56,16 @@ const placeBid = async (req, res) => {
                 ? u.businessName
                 : ((u.firstName || "") + " " + (u.lastName || "")).trim() || u.email || ""
             await Bid.findByIdAndUpdate(bid._id, { userName: populated.userName })
+        }
+
+        // Notify the previous top bidder that they were outbid.
+        if (previousHighestBidder && previousHighestBidder !== String(bidder)) {
+            await createOutbidNotification(previousHighestBidder, foundAuction._id, bid._id)
+        }
+
+        // Notify seller when reserve price is reached for the first time.
+        if (reserveNowMet && foundAuction?.createdBy) {
+            await createReserveReachedNotification(foundAuction.createdBy, foundAuction._id)
         }
 
         res.status(201).json({

@@ -1,7 +1,13 @@
 const Payment = require("../models/PaymentModel")
 const AuctionResult = require("../models/AuctionResultModel")
+const Auction = require("../models/AuctionModel")
 const Razorpay = require("razorpay")
 const crypto = require("crypto")
+const {
+    createPaymentSuccessNotification,
+    createPaymentFailedNotification,
+    createBuyerCompletedPaymentNotification,
+} = require("./NotificationController")
 
 const markAuctionResultPaid = async ({ auctionId, winnerId, paymentMethod, paymentId }) => {
     if (!auctionId || !winnerId) return
@@ -85,6 +91,18 @@ const verifyPayment = async (req, res) => {
             paymentId: razorpay_payment_id,
         })
 
+        if (user && product) {
+            await createPaymentSuccessNotification(user, product, null, razorpay_order_id || razorpay_payment_id)
+            const soldAuction = await Auction.findById(product).select("createdBy").lean()
+            if (soldAuction?.createdBy) {
+                await createBuyerCompletedPaymentNotification(
+                    soldAuction.createdBy,
+                    product,
+                    razorpay_order_id || razorpay_payment_id
+                )
+            }
+        }
+
         res.status(200).json({
             success: true,
             message: "Payment Verified"
@@ -101,6 +119,11 @@ const verifyPayment = async (req, res) => {
             razorpayPaymentId: razorpay_payment_id,
             razorpaySignature: razorpay_signature,
         })
+
+        if (user && product) {
+            await createPaymentFailedNotification(user, product, razorpay_order_id || razorpay_payment_id)
+        }
+
         res.status(400).json({
             success: false,
             message: "Payment Verification Failed"

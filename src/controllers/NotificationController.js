@@ -1,241 +1,392 @@
-const Notification = require("../models/NotificationModel");
-const AuctionResult = require("../models/AuctionResultModel");
-const Auction       = require("../models/AuctionModel"); // adjust path if needed
-const Wishlist      = require("../models/WishlistModel")
+﻿const Notification = require("../models/NotificationModel");
+const Auction = require("../models/AuctionModel");
+const Wishlist = require("../models/WishlistModel");
 
-// ── Milestone config ──────────────────────────────────────────────────────────
-const WINDOW_MS        = 20 * 60 * 1000; // 20-min window around each milestone
-const END_MILESTONES   = [3, 2, 1];      // hours before endTime
-const START_MILESTONES = [3, 2, 1];      // hours before startDate
+const WINDOW_MS = 20 * 60 * 1000; // 20 minutes
+const END_MILESTONES = [3, 2, 1];
+const START_MILESTONES = [24, 3, 2, 1];
 
-// ── Message templates ─────────────────────────────────────────────────────────
 const buildMessage = (type, auctionTitle) => {
-    const t = auctionTitle || "an auction";
-    const map = {
-        ending_3h:   `⏳ "${t}" is ending in ~3 hours! Place your bid before it's too late.`,
-        ending_2h:   `🔥 "${t}" is ending in ~2 hours! Don't miss your chance.`,
-        ending_1h:   `🚨 "${t}" is ending in ~1 hour! This is your last chance to bid.`,
-        starting_3h: `📅 "${t}" starts in ~3 hours. Get ready to place your bid!`,
-        starting_2h: `🔔 "${t}" starts in ~2 hours. Prepare your bid strategy!`,
-        starting_1h: `🟢 "${t}" is starting in ~1 hour! Make sure you're ready.`,
-        starting:    `🟢 "${t}" has just started! Place your bid now.`,
-        won:         `🏆 Congratulations! You won "${t}". Please complete your payment within 24 hours to secure your item.`,
-    };
-    return map[type] || `Notification about "${t}"`;
+  const title = auctionTitle || "an auction";
+
+  const map = {
+    ending_3h: `\"${title}\" is ending in ~3 hours. Place your bid before it is too late.`,
+    ending_2h: `\"${title}\" is ending in ~2 hours. Do not miss your chance.`,
+    ending_1h: `\"${title}\" is ending in ~1 hour. This is your last chance to bid.`,
+    starting_24h: `Your wishlisted scheduled auction \"${title}\" starts in 24 hours.`,
+    starting_3h: `\"${title}\" starts in ~3 hours. Get ready to place your bid.`,
+    starting_2h: `\"${title}\" starts in ~2 hours. Prepare your bid strategy.`,
+    starting_1h: `\"${title}\" starts in ~1 hour. Make sure you are ready.`,
+    starting: `\"${title}\" has just started. Place your bid now.`,
+    won: `Congratulations. You won \"${title}\". Please complete payment within 24 hours.`,
+    outbid: `You have been outbid on \"${title}\" by another user.`,
+    lost: `Auction ended. You lost \"${title}\".`,
+    payment_success: `Payment successful for \"${title}\".`,
+    payment_failed: `Payment failed for \"${title}\". Please retry within 24 hours.`,
+    auction_created: `Auction \"${title}\" was created successfully.`,
+    reserve_reached: `Good news. Your reserve price has been reached for \"${title}\".`,
+    auction_sold: `Auction \"${title}\" sold successfully.`,
+    no_bids_or_reserve_not_met: `Auction \"${title}\" ended without sale (no bids or reserve not met).`,
+    buyer_completed_payment: `Buyer completed payment for \"${title}\".`,
+  };
+
+  return map[type] || `Notification about \"${title}\"`;
 };
 
-// ── Safely create — skip silently if dedupeKey already exists ─────────────────
-const createIfNew = async (userId, auctionId, type, message, auctionResultId = null) => {
-    const dedupeKey = `${type}-${String(userId)}-${String(auctionId)}`;
-    try {
-        await Notification.create({ userId, auctionId, type, message, dedupeKey, auctionResultId });
-        return true;
-    } catch (err) {
-        if (err.code === 11000) return false; // duplicate — already sent, skip
-        throw err;
-    }
+const createIfNew = async (
+  userId,
+  auctionId,
+  type,
+  message,
+  auctionResultId = null,
+  dedupeSuffix = ""
+) => {
+  if (!userId || !auctionId || !type) return false;
+
+  const baseKey = `${type}-${String(userId)}-${String(auctionId)}`;
+  const dedupeKey = dedupeSuffix ? `${baseKey}-${String(dedupeSuffix)}` : baseKey;
+
+  try {
+    await Notification.create({
+      userId,
+      auctionId,
+      type,
+      message,
+      dedupeKey,
+      auctionResultId,
+    });
+    return true;
+  } catch (err) {
+    if (err.code === 11000) return false;
+    throw err;
+  }
 };
 
-// ── Check milestones for one auction + one user ───────────────────────────────
-const processAuction = async (userId, auction, now, counter) => {
-    const start = new Date(auction.startDate).getTime();
-    const end   = new Date(auction.endTime).getTime();
-
-    // ENDING milestones — only when Active and not yet ended
-    if (auction.status === "Active" && end > now) {
-        for (const hrs of END_MILESTONES) {
-            const milestoneMs = hrs * 60 * 60 * 1000;
-            const timeLeft    = end - now;
-            if (timeLeft >= milestoneMs - WINDOW_MS && timeLeft <= milestoneMs + WINDOW_MS) {
-                const ok = await createIfNew(userId, auction._id, `ending_${hrs}h`, buildMessage(`ending_${hrs}h`, auction.title));
-                if (ok) counter.count++;
-            }
-        }
-    }
-
-    // STARTING milestones — only when Scheduled and not yet started
-    if (auction.status === "Scheduled" && start > now) {
-        for (const hrs of START_MILESTONES) {
-            const milestoneMs = hrs * 60 * 60 * 1000;
-            const timeToStart = start - now;
-            if (timeToStart >= milestoneMs - WINDOW_MS && timeToStart <= milestoneMs + WINDOW_MS) {
-                const ok = await createIfNew(userId, auction._id, `starting_${hrs}h`, buildMessage(`starting_${hrs}h`, auction.title));
-                if (ok) counter.count++;
-            }
-        }
-    }
-
-    // JUST STARTED — fired once within 30 min of startDate
-    if (auction.status === "Active" && now - start >= 0 && now - start < 30 * 60 * 1000) {
-        const ok = await createIfNew(userId, auction._id, "starting", buildMessage("starting", auction.title));
-        if (ok) counter.count++;
-    }
+const getAuctionTitle = async (auctionId) => {
+  if (!auctionId) return "an auction";
+  try {
+    const auction = await Auction.findById(auctionId).select("title").lean();
+    return auction?.title || "an auction";
+  } catch {
+    return "an auction";
+  }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SCHEDULER HOOK — called by AuctionScheduler every 30s
-// ═══════════════════════════════════════════════════════════════════════════════
-const generateMilestoneNotifications = async () => {
-    const now     = Date.now();
-    const counter = { count: 0 };
-
-    try {
-        // Step 1 — get all wishlist docs as plain objects (no populate)
-        const wishlists = await Wishlist.find({}).lean();
-
-        if (!wishlists.length) return;
-
-        // Step 2 — collect every unique auctionId across all wishlists
-        // Handles both: { auctions: [ObjectId] }  and  { auctionId: ObjectId }
-        const auctionIdSet = new Set();
-        for (const w of wishlists) {
-            const raw = w.auctions ?? w.auctionId ?? w.auction ?? [];
-            const arr = Array.isArray(raw) ? raw : [raw];
-            arr.forEach(id => id && auctionIdSet.add(String(id)));
-        }
-
-        if (!auctionIdSet.size) return;
-
-        // Step 3 — fetch only Active/Scheduled auctions in one DB call
-        const auctions = await Auction.find({
-            _id:    { $in: [...auctionIdSet] },
-            status: { $in: ["Active", "Scheduled"] },
-        }).lean();
-
-        // Build quick lookup map
-        const auctionMap = {};
-        auctions.forEach(a => { auctionMap[String(a._id)] = a; });
-
-        // Step 4 — for each wishlist user, process each of their auctions
-        for (const w of wishlists) {
-            // Support both "userId" and "user" field name
-            const userId = w.userId ?? w.user;
-            if (!userId) continue;
-
-            const raw = w.auctions ?? w.auctionId ?? w.auction ?? [];
-            const arr = Array.isArray(raw) ? raw : [raw];
-
-            for (const rawId of arr) {
-                if (!rawId) continue;
-                const auction = auctionMap[String(rawId)];
-                if (!auction) continue; // Completed/Cancelled — skip
-                await processAuction(userId, auction, now, counter);
-            }
-        }
-
-        if (counter.count > 0) {
-            console.log(`[NotificationController] 🔔 ${counter.count} new notification(s) created`);
-        }
-
-    } catch (err) {
-        console.error("[NotificationController] ❌ generateMilestoneNotifications error:", err.message);
-    }
+const createAuctionCreatedNotification = async (userId, auctionId) => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(userId, auctionId, "auction_created", buildMessage("auction_created", title));
+  } catch (err) {
+    console.error("[NotificationController] createAuctionCreatedNotification error:", err.message);
+  }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  WON NOTIFICATION — call from AuctionResultController when winner is saved
-// ═══════════════════════════════════════════════════════════════════════════════
+const createReserveReachedNotification = async (userId, auctionId) => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(userId, auctionId, "reserve_reached", buildMessage("reserve_reached", title));
+  } catch (err) {
+    console.error("[NotificationController] createReserveReachedNotification error:", err.message);
+  }
+};
+
+const createAuctionSoldNotification = async (userId, auctionId) => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(userId, auctionId, "auction_sold", buildMessage("auction_sold", title));
+  } catch (err) {
+    console.error("[NotificationController] createAuctionSoldNotification error:", err.message);
+  }
+};
+
+const createNoSaleNotification = async (userId, auctionId) => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(
+      userId,
+      auctionId,
+      "no_bids_or_reserve_not_met",
+      buildMessage("no_bids_or_reserve_not_met", title)
+    );
+  } catch (err) {
+    console.error("[NotificationController] createNoSaleNotification error:", err.message);
+  }
+};
+
 const createWonNotification = async (userId, auctionId, auctionResultId) => {
-    try {
-        const auction = await Auction.findById(auctionId).lean();
-        await createIfNew(userId, auctionId, "won", buildMessage("won", auction?.title), auctionResultId);
-        console.log(`[NotificationController] 🏆 Won notification → user ${userId}`);
-    } catch (err) {
-        console.error("[NotificationController] ❌ createWonNotification error:", err.message);
-    }
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(userId, auctionId, "won", buildMessage("won", title), auctionResultId);
+  } catch (err) {
+    console.error("[NotificationController] createWonNotification error:", err.message);
+  }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  REST ENDPOINTS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// GET /notification/:userId
-const getNotifications = async (req, res) => {
-    try {
-        const notifications = await Notification.find({ userId: req.params.userId })
-            .populate("auctionId")
-            .populate("auctionResultId")
-            .sort({ createdAt: -1 })
-            .limit(100);
-
-        const shaped = notifications.map(n => ({
-            _id:       n._id,
-            type:      n.type,
-            isRead:    n.isRead,
-            body:      n.message,   // frontend reads n.body ?? n.message
-            message:   n.message,
-            createdAt: n.createdAt,
-            auction:   n.auctionId,   // populated Auction doc
-            result:    n.auctionResultId, // populated AuctionResult doc (has winningBid)
-        }));
-
-        res.json({ notifications: shaped });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+const createOutbidNotification = async (userId, auctionId, dedupeSuffix = "") => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(
+      userId,
+      auctionId,
+      "outbid",
+      buildMessage("outbid", title),
+      null,
+      dedupeSuffix || Date.now()
+    );
+  } catch (err) {
+    console.error("[NotificationController] createOutbidNotification error:", err.message);
+  }
 };
 
-// GET /notification/:userId/unread-count
-const getUnreadCount = async (req, res) => {
-    try {
-        const count = await Notification.countDocuments({ userId: req.params.userId, isRead: false });
-        res.json({ count });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+const createLostNotification = async (userId, auctionId) => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(userId, auctionId, "lost", buildMessage("lost", title));
+  } catch (err) {
+    console.error("[NotificationController] createLostNotification error:", err.message);
+  }
 };
 
-// PATCH /notification/:id/read
-const markAsRead = async (req, res) => {
-    try {
-        const n = await Notification.findByIdAndUpdate(req.params.id, { isRead: true }, { new: true });
-        if (!n) return res.status(404).json({ error: "Not found" });
-        res.json({ message: "Marked as read", data: n });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+const createPaymentSuccessNotification = async (
+  userId,
+  auctionId,
+  auctionResultId = null,
+  dedupeSuffix = ""
+) => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(
+      userId,
+      auctionId,
+      "payment_success",
+      buildMessage("payment_success", title),
+      auctionResultId,
+      dedupeSuffix
+    );
+  } catch (err) {
+    console.error("[NotificationController] createPaymentSuccessNotification error:", err.message);
+  }
 };
 
-// PATCH /notification/:userId/read-all
-const markAllAsRead = async (req, res) => {
-    try {
-        const result = await Notification.updateMany(
-            { userId: req.params.userId, isRead: false },
-            { $set: { isRead: true } }
+const createPaymentFailedNotification = async (userId, auctionId, dedupeSuffix = "") => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(
+      userId,
+      auctionId,
+      "payment_failed",
+      buildMessage("payment_failed", title),
+      null,
+      dedupeSuffix || Date.now()
+    );
+  } catch (err) {
+    console.error("[NotificationController] createPaymentFailedNotification error:", err.message);
+  }
+};
+
+const createBuyerCompletedPaymentNotification = async (userId, auctionId, dedupeSuffix = "") => {
+  try {
+    const title = await getAuctionTitle(auctionId);
+    await createIfNew(
+      userId,
+      auctionId,
+      "buyer_completed_payment",
+      buildMessage("buyer_completed_payment", title),
+      null,
+      dedupeSuffix
+    );
+  } catch (err) {
+    console.error("[NotificationController] createBuyerCompletedPaymentNotification error:", err.message);
+  }
+};
+
+const processAuction = async (userId, auction, now, counter) => {
+  const start = new Date(auction.startDate).getTime();
+  const end = new Date(auction.endTime).getTime();
+
+  if (auction.status === "Active" && end > now) {
+    for (const hrs of END_MILESTONES) {
+      const milestoneMs = hrs * 60 * 60 * 1000;
+      const timeLeft = end - now;
+      if (timeLeft >= milestoneMs - WINDOW_MS && timeLeft <= milestoneMs + WINDOW_MS) {
+        const ok = await createIfNew(
+          userId,
+          auction._id,
+          `ending_${hrs}h`,
+          buildMessage(`ending_${hrs}h`, auction.title)
         );
-        res.json({ message: "All marked as read", modified: result.modifiedCount });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        if (ok) counter.count += 1;
+      }
     }
+  }
+
+  if (auction.status === "Scheduled" && start > now) {
+    for (const hrs of START_MILESTONES) {
+      const milestoneMs = hrs * 60 * 60 * 1000;
+      const timeToStart = start - now;
+      if (timeToStart >= milestoneMs - WINDOW_MS && timeToStart <= milestoneMs + WINDOW_MS) {
+        const ok = await createIfNew(
+          userId,
+          auction._id,
+          `starting_${hrs}h`,
+          buildMessage(`starting_${hrs}h`, auction.title)
+        );
+        if (ok) counter.count += 1;
+      }
+    }
+  }
+
+  if (auction.status === "Active" && now - start >= 0 && now - start < 30 * 60 * 1000) {
+    const ok = await createIfNew(userId, auction._id, "starting", buildMessage("starting", auction.title));
+    if (ok) counter.count += 1;
+  }
 };
 
-// DELETE /notification/:id
+const generateMilestoneNotifications = async () => {
+  const now = Date.now();
+  const counter = { count: 0 };
+
+  try {
+    const wishlists = await Wishlist.find({}).lean();
+    if (!wishlists.length) return;
+
+    const auctionIdSet = new Set();
+    for (const wishlist of wishlists) {
+      const raw = wishlist.auctions ?? wishlist.auctionId ?? wishlist.auction ?? [];
+      const arr = Array.isArray(raw) ? raw : [raw];
+      arr.forEach((id) => id && auctionIdSet.add(String(id)));
+    }
+
+    if (!auctionIdSet.size) return;
+
+    const auctions = await Auction.find({
+      _id: { $in: [...auctionIdSet] },
+      status: { $in: ["Active", "Scheduled"] },
+    }).lean();
+
+    const auctionMap = {};
+    auctions.forEach((auction) => {
+      auctionMap[String(auction._id)] = auction;
+    });
+
+    for (const wishlist of wishlists) {
+      const userId = wishlist.userId ?? wishlist.user;
+      if (!userId) continue;
+
+      const raw = wishlist.auctions ?? wishlist.auctionId ?? wishlist.auction ?? [];
+      const arr = Array.isArray(raw) ? raw : [raw];
+
+      for (const rawId of arr) {
+        if (!rawId) continue;
+        const auction = auctionMap[String(rawId)];
+        if (!auction) continue;
+        await processAuction(userId, auction, now, counter);
+      }
+    }
+
+    if (counter.count > 0) {
+      console.log(`[NotificationController] ${counter.count} new milestone notification(s) created`);
+    }
+  } catch (err) {
+    console.error("[NotificationController] generateMilestoneNotifications error:", err.message);
+  }
+};
+
+const getNotifications = async (req, res) => {
+  try {
+    const notifications = await Notification.find({ userId: req.params.userId })
+      .populate("auctionId")
+      .populate("auctionResultId")
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    const shaped = notifications.map((notification) => ({
+      _id: notification._id,
+      type: notification.type,
+      isRead: notification.isRead,
+      body: notification.message,
+      message: notification.message,
+      createdAt: notification.createdAt,
+      auction: notification.auctionId,
+      result: notification.auctionResultId,
+    }));
+
+    res.json({ notifications: shaped });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const getUnreadCount = async (req, res) => {
+  try {
+    const count = await Notification.countDocuments({ userId: req.params.userId, isRead: false });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const markAsRead = async (req, res) => {
+  try {
+    const notification = await Notification.findByIdAndUpdate(
+      req.params.id,
+      { isRead: true },
+      { new: true }
+    );
+    if (!notification) return res.status(404).json({ error: "Not found" });
+    res.json({ message: "Marked as read", data: notification });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const markAllAsRead = async (req, res) => {
+  try {
+    const result = await Notification.updateMany(
+      { userId: req.params.userId, isRead: false },
+      { $set: { isRead: true } }
+    );
+    res.json({ message: "All marked as read", modified: result.modifiedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 const deleteNotification = async (req, res) => {
-    try {
-        await Notification.findByIdAndDelete(req.params.id);
-        res.json({ message: "Deleted" });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+  try {
+    await Notification.findByIdAndDelete(req.params.id);
+    res.json({ message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };
 
-// DELETE /notification/:userId/clear-all
 const clearAllNotifications = async (req, res) => {
-    try {
-        const result = await Notification.deleteMany({ userId: req.params.userId });
-        res.json({ message: "Cleared", deleted: result.deletedCount });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+  try {
+    const result = await Notification.deleteMany({ userId: req.params.userId });
+    res.json({ message: "Cleared", deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 };
 
 module.exports = {
-    generateMilestoneNotifications,
-    createWonNotification,
-    getNotifications,
-    getUnreadCount,
-    markAsRead,
-    markAllAsRead,
-    deleteNotification,
-    clearAllNotifications,
+  generateMilestoneNotifications,
+  createAuctionCreatedNotification,
+  createReserveReachedNotification,
+  createAuctionSoldNotification,
+  createNoSaleNotification,
+  createWonNotification,
+  createOutbidNotification,
+  createLostNotification,
+  createPaymentSuccessNotification,
+  createPaymentFailedNotification,
+  createBuyerCompletedPaymentNotification,
+  getNotifications,
+  getUnreadCount,
+  markAsRead,
+  markAllAsRead,
+  deleteNotification,
+  clearAllNotifications,
 };
+

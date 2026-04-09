@@ -1,5 +1,6 @@
 const Auction    = require("../models/AuctionModel");
 const cloudinary = require("cloudinary").v2;
+const { createAuctionCreatedNotification } = require("./NotificationController");
 
 // Configure Cloudinary from environment variables.
 // Make sure your .env has:
@@ -60,6 +61,11 @@ const deriveStatusAndEndTime = (startDate, durationMinutes) => {
 const createAuction = async (req, res) => {
     try {
         const auction = await Auction.create(req.body);
+
+        // Notify business seller that auction creation succeeded.
+        if (auction?.createdBy) {
+            await createAuctionCreatedNotification(auction.createdBy, auction._id);
+        }
 
         res.status(201).json({
             message: "Auction created successfully",
