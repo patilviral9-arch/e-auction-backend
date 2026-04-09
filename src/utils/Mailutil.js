@@ -25,11 +25,13 @@ const getTransportConfigs = () => {
     
     return [
         {
-            service: "gmail", // 🟢 Use the built-in service helper
-            family: 4,        // 🟢 Still force IPv4 to prevent ENETUNREACH
+            service: "gmail",
+            // 🟢 CRITICAL: This fixes the ENETUNREACH IPv6 error
+            family: 4, 
             auth: { user, pass },
-            connectionTimeout: 30000, 
-            greetingTimeout: 30000,
+            // 🟢 TIMEOUTS: Gives Railway enough time for the handshake
+            connectionTimeout: 20000, 
+            greetingTimeout: 20000,
             socketTimeout: 30000,
         }
     ];
