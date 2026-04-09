@@ -1,6 +1,6 @@
 const AuctionResult = require("../models/AuctionResultModel");
 const Auction       = require("../models/AuctionModel");
-const User          = require("../models/UserModel");
+const User          = require("../models/Usermodel");
 const Payment       = require("../models/PaymentModel");
 const Wallet        = require("../models/WalletModel");
 
