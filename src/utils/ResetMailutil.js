@@ -14,8 +14,16 @@ const getMailConfig = () => {
   return { user, pass };
 };
 
+const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
 const sendResetMail = async (to, resetUrl) => {
   const { user, pass } = getMailConfig();
+  const recipient = normalizeRecipient(to);
+
+  if (!isValidEmail(recipient)) {
+    throw new Error(`Invalid recipient email: ${to}`);
+  }
 
   const transporter = mailer.createTransport({
     service: "gmail",
@@ -29,13 +37,17 @@ const sendResetMail = async (to, resetUrl) => {
 
   const mailOptions = {
     from: `"E-Auction" <${user}>`,
-    to,
+    to: recipient,
     subject: "Reset Your E-Auction Password",
     html: htmlContent,
   };
 
   try {
     const mailResponse = await transporter.sendMail(mailOptions);
+    if (!Array.isArray(mailResponse.accepted) || mailResponse.accepted.length === 0) {
+      const rejected = Array.isArray(mailResponse.rejected) ? mailResponse.rejected.join(", ") : "unknown";
+      throw new Error(`Reset email not accepted by SMTP server. Rejected: ${rejected}`);
+    }
     console.log("Reset Email Sent ID:", mailResponse.messageId);
     return mailResponse;
   } catch (error) {

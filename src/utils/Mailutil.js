@@ -14,6 +14,9 @@ const getMailConfig = () => {
     return { user, pass };
 };
 
+const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
 const createTransporter = () => {
     const { user, pass } = getMailConfig();
     return mailer.createTransport({
@@ -31,6 +34,11 @@ const createTransporter = () => {
 const mailSend = async (to, subject, content, type) => {
     const transporter = createTransporter();
     const { user } = getMailConfig();
+    const recipient = normalizeRecipient(to);
+
+    if (!isValidEmail(recipient)) {
+        throw new Error(`Invalid recipient email: ${to}`);
+    }
 
     let htmlContent;
 
@@ -47,13 +55,17 @@ const mailSend = async (to, subject, content, type) => {
 
     const mailOptions = {
         from: `"E-Auction" <${user}>`,
-        to,
+        to: recipient,
         subject,
         html: htmlContent
     }
 
     try {
         const mailResponse = await transporter.sendMail(mailOptions);
+        if (!Array.isArray(mailResponse.accepted) || mailResponse.accepted.length === 0) {
+            const rejected = Array.isArray(mailResponse.rejected) ? mailResponse.rejected.join(", ") : "unknown";
+            throw new Error(`Email not accepted by SMTP server. Rejected: ${rejected}`);
+        }
         console.log("Email Sent ID:", mailResponse.messageId);
         return mailResponse;
     } catch (error) {

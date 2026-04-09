@@ -8,6 +8,8 @@ const secret       = process.env.JWT_SECRET_KEY;
 // ── In-memory OTP store  { email → { otp, expiresAt } } ─────────────────────
 // For production swap this with Redis or a DB collection
 const otpStore = new Map();
+const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
 // ── Helper: generate a 6-digit OTP ───────────────────────────────────────────
 const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
@@ -16,12 +18,13 @@ const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString()
 // Called by Signup before showing the OTP modal.
 // Generates a fresh OTP, stores it for 10 minutes, and emails it.
 const sendOtp = async (req, res) => {
-    const { email } = req.body;
+    const email = normalizeEmail(req.body?.email);
     if (!email) return res.status(400).json({ message: "Email is required." });
+    if (!isValidEmail(email)) return res.status(400).json({ message: "Enter a valid email address." });
 
     try {
         // Prevent duplicate accounts
-        const existing = await userschema.findOne({ email: email.toLowerCase().trim() });
+        const existing = await userschema.findOne({ email });
         if (existing) {
             return res.status(409).json({ message: "An account with this email already exists." });
         }
@@ -29,7 +32,7 @@ const sendOtp = async (req, res) => {
         const otp       = generateOtp();
         const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
-        otpStore.set(email.toLowerCase(), { otp, expiresAt });
+        otpStore.set(email, { otp, expiresAt });
 
         // Send the OTP email using your existing Mailutil
         // Pass type "otp" — add a matching template to Mailutil (see note below)
@@ -46,28 +49,29 @@ const sendOtp = async (req, res) => {
 // Called by the OTP modal before registering the user.
 // Returns 200 if valid, 400/410 if wrong or expired.
 const verifyOtp = (req, res) => {
-    const { email, otp } = req.body;
+    const email = normalizeEmail(req.body?.email);
+    const otp = String(req.body?.otp || "").trim();
     if (!email || !otp) {
         return res.status(400).json({ message: "Email and OTP are required." });
     }
 
-    const record = otpStore.get(email.toLowerCase());
+    const record = otpStore.get(email);
 
     if (!record) {
         return res.status(400).json({ message: "No OTP found for this email. Please request a new one." });
     }
 
     if (Date.now() > record.expiresAt) {
-        otpStore.delete(email.toLowerCase());
+        otpStore.delete(email);
         return res.status(410).json({ message: "OTP has expired. Please request a new one." });
     }
 
-    if (record.otp !== otp.toString()) {
+    if (record.otp !== otp) {
         return res.status(400).json({ message: "Incorrect OTP. Please try again." });
     }
 
     // OTP is valid — remove it so it can't be reused
-    otpStore.delete(email.toLowerCase());
+    otpStore.delete(email);
 
     res.status(200).json({ message: "OTP verified successfully." });
 };
