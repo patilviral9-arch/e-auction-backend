@@ -25,29 +25,15 @@ const getTransportConfigs = () => {
     
     return [
         {
-            host: "smtp.gmail.com",
-            port: 587,
-            secure: false, // Port 587 MUST use false
-            
-            // 🟢 CRITICAL: This fixes the ENETUNREACH IPv6 error
-            family: 4, 
-            
+            service: "gmail", // 🟢 Use the built-in service helper
+            family: 4,        // 🟢 Still force IPv4 to prevent ENETUNREACH
             auth: { user, pass },
-            
-            // 🟢 INCREASED TIMEOUTS: Gives Render more time to connect
-            connectionTimeout: 20000, // 20 seconds
-            greetingTimeout: 20000,
+            connectionTimeout: 30000, 
+            greetingTimeout: 30000,
             socketTimeout: 30000,
-            
-            // 🟢 EXTRA SECURITY: Ensures TLS is required
-            tls: {
-                rejectUnauthorized: true,
-                minVersion: "TLSv1.2"
-            }
         }
     ];
-};;
-
+};
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
 const mailSend = async (to, subject, content, type) => {
