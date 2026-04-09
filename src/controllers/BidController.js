@@ -1,5 +1,5 @@
 const Bid = require("../models/BidModel")
-const Auction = require("../models/Auctionmodel")
+const Auction = require("../models/AuctionModel")
 const {
     createOutbidNotification,
     createReserveReachedNotification,
