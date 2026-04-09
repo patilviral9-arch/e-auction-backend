@@ -1,5 +1,5 @@
 ﻿const cron = require("node-cron");
-const Auction = require("../models/Auctionmodel");
+const Auction = require("../models/AuctionModel");
 const AuctionResult = require("../models/AuctionResultModel");
 const Bid = require("../models/BidModel");
 const User = require("../models/UserModel");
