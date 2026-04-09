@@ -11,6 +11,7 @@ const otpStore = new Map();
 const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 15000);
+const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 8000);
 
 const withTimeout = (promise, ms, label = "Operation") =>
     new Promise((resolve, reject) => {
@@ -42,7 +43,11 @@ const sendOtp = async (req, res) => {
 
     try {
         // Prevent duplicate accounts
-        const existing = await userschema.findOne({ email });
+        const existing = await withTimeout(
+            userschema.findOne({ email }).lean(),
+            OTP_USER_LOOKUP_TIMEOUT_MS,
+            "User lookup"
+        );
         if (existing) {
             return res.status(409).json({ message: "An account with this email already exists." });
         }
@@ -63,8 +68,22 @@ const sendOtp = async (req, res) => {
         res.status(200).json({ message: "OTP sent successfully." });
     } catch (err) {
         console.error("sendOtp error:", err);
-        const timedOut = String(err?.message || "").toLowerCase().includes("timed out");
-        res.status(timedOut ? 504 : 500).json({ message: "Failed to send OTP.", err: err.message });
+        const errorText = String(err?.message || "");
+        const lower = errorText.toLowerCase();
+        const timedOut = lower.includes("timed out");
+        const authError = lower.includes("invalid login") || lower.includes("authentication") || lower.includes("auth");
+        const configError = lower.includes("email credentials are missing");
+
+        const status = timedOut ? 504 : authError || configError ? 500 : 500;
+        const message = timedOut
+            ? "OTP service timed out. Please try again."
+            : authError
+                ? "OTP email configuration/auth failed."
+                : configError
+                    ? "Backend email credentials are not configured."
+                    : "Failed to send OTP.";
+
+        res.status(status).json({ message, err: errorText });
     }
 };
 
