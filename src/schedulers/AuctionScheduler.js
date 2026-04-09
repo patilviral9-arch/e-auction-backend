@@ -2,7 +2,7 @@
 const Auction = require("../models/AuctionModel");
 const AuctionResult = require("../models/AuctionResultModel");
 const Bid = require("../models/BidModel");
-const User = require("../models/UserModel");
+const User = require("../models/Usermodel");
 const {
   generateMilestoneNotifications,
   createWonNotification,
