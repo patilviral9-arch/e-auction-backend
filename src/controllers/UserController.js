@@ -10,6 +10,24 @@ const secret       = process.env.JWT_SECRET_KEY;
 const otpStore = new Map();
 const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 15000);
+
+const withTimeout = (promise, ms, label = "Operation") =>
+    new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+
+        promise
+            .then((value) => {
+                clearTimeout(timer);
+                resolve(value);
+            })
+            .catch((error) => {
+                clearTimeout(timer);
+                reject(error);
+            });
+    });
 
 // ── Helper: generate a 6-digit OTP ───────────────────────────────────────────
 const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
@@ -36,12 +54,17 @@ const sendOtp = async (req, res) => {
 
         // Send the OTP email using your existing Mailutil
         // Pass type "otp" — add a matching template to Mailutil (see note below)
-        await mailSend(email, "Your E-Auction Verification Code", otp, "otp");
+        await withTimeout(
+            mailSend(email, "Your E-Auction Verification Code", otp, "otp"),
+            OTP_EMAIL_TIMEOUT_MS,
+            "OTP email send"
+        );
 
         res.status(200).json({ message: "OTP sent successfully." });
     } catch (err) {
         console.error("sendOtp error:", err);
-        res.status(500).json({ message: "Failed to send OTP.", err: err.message });
+        const timedOut = String(err?.message || "").toLowerCase().includes("timed out");
+        res.status(timedOut ? 504 : 500).json({ message: "Failed to send OTP.", err: err.message });
     }
 };
 

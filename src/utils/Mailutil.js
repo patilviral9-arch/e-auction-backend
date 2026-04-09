@@ -24,6 +24,9 @@ const createTransporter = () => {
         port: 587,
         secure: false,
         family: 4, // Keeps the fix for Render's IPv6 timeout
+        connectionTimeout: Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 10000),
+        greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 10000),
+        socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000),
         auth: { user: user, // 2. Must use the 'user' variable from above
             pass: pass }
     });
