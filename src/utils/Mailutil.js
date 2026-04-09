@@ -22,15 +22,17 @@ const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 4500
 
 const getTransportConfigs = () => {
     const { user, pass } = getMailConfig();
+    
     return [
         {
             host: "smtp.gmail.com",
             port: 587,
-            secure: true, // 🟢 Use 465/true for a faster SSL handshake
-            family: 4, 
+            secure: false, // 🟢 Must be false for port 587 (STARTTLS)
+            family: 4,     // 🟢 CRITICAL: This stops the ENETUNREACH error
             auth: { user, pass },
-            connectionTimeout: 20000, // 🟢 Lower these so it fails fast and retries
-            greetingTimeout: 20000,
+            connectionTimeout: 40000, 
+            greetingTimeout: 40000,
+            socketTimeout: 60000,
         }
     ];
 };
