@@ -42,14 +42,18 @@ const sendOtp = async (req, res) => {
     if (!isValidEmail(email)) return res.status(400).json({ message: "Enter a valid email address." });
 
     try {
-        // Prevent duplicate accounts
-        const existing = await withTimeout(
-            userschema.findOne({ email }).lean(),
-            OTP_USER_LOOKUP_TIMEOUT_MS,
-            "User lookup"
-        );
-        if (existing) {
-            return res.status(409).json({ message: "An account with this email already exists." });
+        // Duplicate check is best-effort; OTP should not hang if DB is slow.
+        try {
+            const existing = await withTimeout(
+                userschema.findOne({ email }).lean(),
+                OTP_USER_LOOKUP_TIMEOUT_MS,
+                "User lookup"
+            );
+            if (existing) {
+                return res.status(409).json({ message: "An account with this email already exists." });
+            }
+        } catch (lookupErr) {
+            console.warn("[sendOtp] User lookup skipped:", lookupErr.message);
         }
 
         const otp       = generateOtp();
