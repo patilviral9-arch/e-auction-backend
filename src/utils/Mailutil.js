@@ -17,10 +17,10 @@ const getMailConfig = () => {
 const createTransporter = () => {
     const { user, pass } = getMailConfig();
     return mailer.createTransport({
-        host: process.env.EMAIL_USER, // Specify host
-        port: 587,              // Use port 587
-        secure: false,           // Use false for port 587
-        family: 4,              // Force IPv4 to prevent the ESOCKET error in logs
+        host: "smtp.gmail.com", // Set this explicitly to Gmail's host
+        port: 587,
+        secure: false,
+        family: 4, // Keeps the fix for Render's IPv6 timeout
         auth: { user, pass }
     });
 };
