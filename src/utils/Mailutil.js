@@ -25,7 +25,7 @@ const getTransportConfigs = () => {
     return [
         {
             host: "smtp.gmail.com",
-            port: 465,
+            port: 587,
             secure: true, // 🟢 Use 465/true for a faster SSL handshake
             family: 4, 
             auth: { user, pass },
