@@ -194,7 +194,7 @@ const forgotPassword = async (req, res) => {
             { expiresIn: "15m" }
         );
 
-        const resetUrl = `http://localhost:5173/resetpassword/${token}`;
+        const resetUrl = `https://e-auction-e617.vercel.app/resetpassword/${token}`;
         await sendResetMail(foundUserFromEmail.email, resetUrl);
 
         res.status(200).json({ message: "Reset link has been sent to your email." });
