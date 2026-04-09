@@ -3,17 +3,30 @@ require("dotenv").config()
 
 const { generateAuctionEmail, resetEmailTemplate, generateOtpEmail } = require("./EmailTemplates")
 
+const getMailConfig = () => {
+    const user = String(process.env.EMAIL_USER || "").trim();
+    const pass = String(process.env.EMAIL_PASSWORD || "").replace(/\s+/g, "");
+
+    if (!user || !pass) {
+        throw new Error("Email credentials are missing. Set EMAIL_USER and EMAIL_PASSWORD in backend .env");
+    }
+
+    return { user, pass };
+};
+
+const createTransporter = () => {
+    const { user, pass } = getMailConfig();
+    return mailer.createTransport({
+        service: "gmail",
+        auth: { user, pass }
+    });
+};
+
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
 const mailSend = async (to, subject, content, type) => {
-
-    const transporter = mailer.createTransport({
-        service: "gmail",
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASSWORD
-        }
-    })
+    const transporter = createTransporter();
+    const { user } = getMailConfig();
 
     let htmlContent;
 
@@ -29,7 +42,7 @@ const mailSend = async (to, subject, content, type) => {
     }
 
     const mailOptions = {
-        from: `"E-Auction" <${process.env.EMAIL_USER}>`,
+        from: `"E-Auction" <${user}>`,
         to,
         subject,
         html: htmlContent

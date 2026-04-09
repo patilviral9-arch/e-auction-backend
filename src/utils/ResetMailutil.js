@@ -3,22 +3,34 @@ require("dotenv").config();
 
 const { resetEmailTemplate } = require("./EmailTemplates");
 
+const getMailConfig = () => {
+  const user = String(process.env.EMAIL_USER || "").trim();
+  const pass = String(process.env.EMAIL_PASSWORD || "").replace(/\s+/g, "");
+
+  if (!user || !pass) {
+    throw new Error("Email credentials are missing. Set EMAIL_USER and EMAIL_PASSWORD in backend .env");
+  }
+
+  return { user, pass };
+};
+
 const sendResetMail = async (to, resetUrl) => {
+  const { user, pass } = getMailConfig();
 
   const transporter = mailer.createTransport({
     service: "gmail",
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD,
+      user,
+      pass,
     },
   });
 
   const htmlContent = resetEmailTemplate(resetUrl);
 
   const mailOptions = {
-    from: `"E-Auction" <${process.env.EMAIL_USER}>`,
-    to: to,
-    subject: "Reset Your E-Auction Password 🔑",
+    from: `"E-Auction" <${user}>`,
+    to,
+    subject: "Reset Your E-Auction Password",
     html: htmlContent,
   };
 
