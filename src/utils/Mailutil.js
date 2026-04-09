@@ -22,16 +22,15 @@ const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 4500
 
 const getTransportConfigs = () => {
     const { user, pass } = getMailConfig();
-    
     return [
         {
-            service: "gmail",
+            host: "smtp.gmail.com",
+            port: 465,
+            secure: true, // 🟢 Use 465/true for a faster SSL handshake
             family: 4, 
             auth: { user, pass },
-            // Use the variables defined at the top of your file
-            connectionTimeout: MAIL_CONNECTION_TIMEOUT_MS, 
-            greetingTimeout: MAIL_GREETING_TIMEOUT_MS,
-            socketTimeout: MAIL_SOCKET_TIMEOUT_MS,
+            connectionTimeout: 20000, // 🟢 Lower these so it fails fast and retries
+            greetingTimeout: 20000,
         }
     ];
 };
