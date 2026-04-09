@@ -16,9 +16,9 @@ const getMailConfig = () => {
 
 const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const MAIL_CONNECTION_TIMEOUT_MS = Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 10000);
-const MAIL_GREETING_TIMEOUT_MS = Number(process.env.MAIL_GREETING_TIMEOUT_MS || 10000);
-const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000);
+const MAIL_CONNECTION_TIMEOUT_MS = Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 30000);
+const MAIL_GREETING_TIMEOUT_MS = Number(process.env.MAIL_GREETING_TIMEOUT_MS || 30000);
+const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 45000);
 
 const getTransportConfigs = () => {
     const { user, pass } = getMailConfig();
