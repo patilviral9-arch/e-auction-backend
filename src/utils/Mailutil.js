@@ -16,26 +16,31 @@ const getMailConfig = () => {
 
 const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const MAIL_CONNECTION_TIMEOUT_MS = Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 10000);
+const MAIL_GREETING_TIMEOUT_MS = Number(process.env.MAIL_GREETING_TIMEOUT_MS || 10000);
+const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000);
 
-const createTransporter = () => {
+const getTransportConfigs = () => {
     const { user, pass } = getMailConfig();
-    return mailer.createTransport({
-        host: "smtp.gmail.com", // Set this explicitly to Gmail's host
-        port: 587,
-        secure: false,
-        family: 4, // Keeps the fix for Render's IPv6 timeout
-        connectionTimeout: Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 10000),
-        greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 10000),
-        socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 20000),
-        auth: { user: user, // 2. Must use the 'user' variable from above
-            pass: pass }
-    });
+    
+    // This single configuration is the most reliable for Render + Gmail
+    return [
+        {
+            host: "smtp.gmail.com",
+            port: 587,
+            secure: false, // Port 587 uses STARTTLS, so secure must be false
+            family: 4,     // Forces IPv4 to fix the ENETUNREACH error
+            auth: { user, pass },
+            connectionTimeout: MAIL_CONNECTION_TIMEOUT_MS,
+            greetingTimeout: MAIL_GREETING_TIMEOUT_MS,
+            socketTimeout: MAIL_SOCKET_TIMEOUT_MS,
+        }
+    ];
 };
 
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
 const mailSend = async (to, subject, content, type) => {
-    const transporter = createTransporter();
     const { user } = getMailConfig();
     const recipient = normalizeRecipient(to);
 
@@ -63,18 +68,29 @@ const mailSend = async (to, subject, content, type) => {
         html: htmlContent
     }
 
-    try {
-        const mailResponse = await transporter.sendMail(mailOptions);
-        if (!Array.isArray(mailResponse.accepted) || mailResponse.accepted.length === 0) {
-            const rejected = Array.isArray(mailResponse.rejected) ? mailResponse.rejected.join(", ") : "unknown";
-            throw new Error(`Email not accepted by SMTP server. Rejected: ${rejected}`);
+    const transportConfigs = getTransportConfigs();
+    const failures = [];
+
+    for (const config of transportConfigs) {
+        const transporter = mailer.createTransport(config);
+        try {
+            const mailResponse = await transporter.sendMail(mailOptions);
+            if (!Array.isArray(mailResponse.accepted) || mailResponse.accepted.length === 0) {
+                const rejected = Array.isArray(mailResponse.rejected) ? mailResponse.rejected.join(", ") : "unknown";
+                throw new Error(`Email not accepted by SMTP server. Rejected: ${rejected}`);
+            }
+            console.log("Email Sent ID:", mailResponse.messageId);
+            return mailResponse;
+        } catch (error) {
+            const transportLabel = config.service
+                ? `service:${config.service}`
+                : `${config.host}:${config.port}${config.secure ? " (ssl)" : ""}`;
+            failures.push(`${transportLabel} -> ${error.message}`);
+            console.error("Nodemailer Error:", transportLabel, error.message);
         }
-        console.log("Email Sent ID:", mailResponse.messageId);
-        return mailResponse;
-    } catch (error) {
-        console.error("Nodemailer Error:", error);
-        throw error;
     }
+
+    throw new Error(`All mail transports failed. ${failures.join(" | ")}`);
 }
 
 module.exports = mailSend
