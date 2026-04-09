@@ -21,7 +21,8 @@ const createTransporter = () => {
         port: 587,
         secure: false,
         family: 4, // Keeps the fix for Render's IPv6 timeout
-        auth: { user, pass }
+        auth: { user: user, // 2. Must use the 'user' variable from above
+            pass: pass }
     });
 };
 
