@@ -23,20 +23,30 @@ const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 2000
 const getTransportConfigs = () => {
     const { user, pass } = getMailConfig();
     
-    // This single configuration is the most reliable for Render + Gmail
     return [
         {
             host: "smtp.gmail.com",
             port: 587,
-            secure: false, // Port 587 uses STARTTLS, so secure must be false
-            family: 4,     // Forces IPv4 to fix the ENETUNREACH error
+            secure: false, // Port 587 MUST use false
+            
+            // 🟢 CRITICAL: This fixes the ENETUNREACH IPv6 error
+            family: 4, 
+            
             auth: { user, pass },
-            connectionTimeout: MAIL_CONNECTION_TIMEOUT_MS,
-            greetingTimeout: MAIL_GREETING_TIMEOUT_MS,
-            socketTimeout: MAIL_SOCKET_TIMEOUT_MS,
+            
+            // 🟢 INCREASED TIMEOUTS: Gives Render more time to connect
+            connectionTimeout: 20000, // 20 seconds
+            greetingTimeout: 20000,
+            socketTimeout: 30000,
+            
+            // 🟢 EXTRA SECURITY: Ensures TLS is required
+            tls: {
+                rejectUnauthorized: true,
+                minVersion: "TLSv1.2"
+            }
         }
     ];
-};
+};;
 
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
