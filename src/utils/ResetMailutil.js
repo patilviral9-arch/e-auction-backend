@@ -1,4 +1,4 @@
-const { Resend } = require("resend");
+const mailer = require("nodemailer");
 require("dotenv").config();
 const { resetEmailTemplate } = require("./EmailTemplates");
 
@@ -6,9 +6,11 @@ const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
 const sendResetMail = async (to, resetUrl) => {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    throw new Error("RESEND_API_KEY is missing. Set it in your backend .env");
+  const user = process.env.BREVO_USER;
+  const pass = process.env.BREVO_PASS;
+
+  if (!user || !pass) {
+    throw new Error("Brevo credentials missing. Set BREVO_USER and BREVO_PASS in environment variables.");
   }
 
   const recipient = normalizeRecipient(to);
@@ -16,27 +18,28 @@ const sendResetMail = async (to, resetUrl) => {
     throw new Error(`Invalid recipient email: ${to}`);
   }
 
-  const resend = new Resend(apiKey);
+  const transporter = mailer.createTransport({
+    host: "smtp-relay.brevo.com",
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+  });
+
   const htmlContent = resetEmailTemplate(resetUrl);
 
   try {
-    const { data, error } = await resend.emails.send({
-      from: "E-Auction <onboarding@resend.dev>", // replace once you verify your own domain
+    const mailResponse = await transporter.sendMail({
+      from: `"E-Auction" <${user}>`,
       to: recipient,
       subject: "Reset Your E-Auction Password",
       html: htmlContent,
     });
 
-    if (error) {
-      console.error("Reset Mail Error:", error);
-      throw new Error(`Reset email failed: ${error.message}`);
-    }
-
-    console.log("Reset Email Sent ID:", data.id);
-    return data;
-  } catch (err) {
-    console.error("Reset Mail Error:", err);
-    throw err;
+    console.log("Reset Email Sent ID:", mailResponse.messageId);
+    return mailResponse;
+  } catch (error) {
+    console.error("Reset Mail Error:", error);
+    throw error;
   }
 };
 
