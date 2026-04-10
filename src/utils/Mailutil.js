@@ -13,7 +13,7 @@ const parseAddressEmail = (value) => {
 };
 const isConsumerMailboxDomain = (value) =>
   /@(gmail\.com|yahoo\.com|outlook\.com|hotmail\.com|live\.com|icloud\.com)$/i.test(value);
-const EMAIL_SEND_TIMEOUT_MS = Number(process.env.EMAIL_SEND_TIMEOUT_MS || 45000);
+const EMAIL_SEND_TIMEOUT_MS = Number(process.env.EMAIL_SEND_TIMEOUT_MS || 120000);
 
 const withTimeout = (promise, ms, label = "Email send") =>
   new Promise((resolve, reject) => {
@@ -84,35 +84,80 @@ const shouldFallbackToSmtp = (message) => {
   );
 };
 
-const getSmtpTransporter = () => {
+const getSmtpTransporters = () => {
   const user = String(process.env.EMAIL_USER || "").trim();
   const pass = String(process.env.EMAIL_PASSWORD || "").trim();
-  if (!user || !pass) return null;
+  if (!user || !pass) return [];
 
-  return nodemailer.createTransport({
-    service: String(process.env.SMTP_SERVICE || "gmail").trim(),
+  const connectionTimeout = Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 120000);
+  const greetingTimeout = Number(process.env.MAIL_GREETING_TIMEOUT_MS || 120000);
+  const socketTimeout = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 300000);
+  const common = {
     auth: { user, pass },
-    connectionTimeout: Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 120000),
-    greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 120000),
-    socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 300000),
-  });
+    connectionTimeout,
+    greetingTimeout,
+    socketTimeout,
+  };
+
+  const transports = [];
+  const host = String(process.env.SMTP_HOST || "").trim();
+  if (host) {
+    const port = Number(process.env.SMTP_PORT || 465);
+    const secure = String(process.env.SMTP_SECURE || String(port === 465))
+      .trim()
+      .toLowerCase() === "true";
+    transports.push(nodemailer.createTransport({ ...common, host, port, secure }));
+    return transports;
+  }
+
+  const service = String(process.env.SMTP_SERVICE || "").trim();
+  if (service) {
+    transports.push(nodemailer.createTransport({ ...common, service }));
+  }
+
+  transports.push(nodemailer.createTransport({
+    ...common,
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+  }));
+  transports.push(nodemailer.createTransport({
+    ...common,
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    requireTLS: true,
+  }));
+  return transports;
 };
 
-const sendViaSmtp = async ({ transporter, recipient, subject, htmlContent }) => {
+const sendViaSmtp = async ({ transporters, recipient, subject, htmlContent }) => {
   const smtpUser = String(process.env.EMAIL_USER || "").trim();
   const from = String(process.env.EMAIL_FROM || "").trim() || `"E-Auction" <${smtpUser}>`;
-  const info = await withTimeout(
-    transporter.sendMail({
-      from,
-      to: recipient,
-      subject,
-      html: htmlContent,
-    }),
-    EMAIL_SEND_TIMEOUT_MS,
-    "SMTP email send"
-  );
-  console.log("SMTP Email Sent ID:", info?.messageId || "n/a");
-  return info;
+  let lastError = null;
+
+  for (let i = 0; i < transporters.length; i += 1) {
+    const transporter = transporters[i];
+    try {
+      const info = await withTimeout(
+        transporter.sendMail({
+          from,
+          to: recipient,
+          subject,
+          html: htmlContent,
+        }),
+        EMAIL_SEND_TIMEOUT_MS,
+        `SMTP email send (attempt ${i + 1})`
+      );
+      console.log("SMTP Email Sent ID:", info?.messageId || "n/a");
+      return info;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[mailSend] SMTP attempt ${i + 1} failed: ${String(err?.message || err)}`);
+    }
+  }
+
+  throw lastError || new Error("SMTP email send failed.");
 };
 
 // mailSend(to, subject, content, type)
@@ -124,7 +169,7 @@ const mailSend = async (to, subject, content, type) => {
   }
 
   const htmlContent = pickHtmlTemplate(content, type);
-  const smtpTransporter = getSmtpTransporter();
+  const smtpTransporters = getSmtpTransporters();
   const resend = getResendClient();
   if (resend) {
     const from = getFromAddress();
@@ -155,16 +200,16 @@ const mailSend = async (to, subject, content, type) => {
       return result.data;
     } catch (err) {
       const msg = String(err?.message || err);
-      if (smtpTransporter && shouldFallbackToSmtp(msg)) {
+      if (smtpTransporters.length > 0 && shouldFallbackToSmtp(msg)) {
         console.warn("[mailSend] Resend limited in test mode; falling back to SMTP.");
-        return sendViaSmtp({ transporter: smtpTransporter, recipient, subject, htmlContent });
+        return sendViaSmtp({ transporters: smtpTransporters, recipient, subject, htmlContent });
       }
       throw err;
     }
   }
 
-  if (smtpTransporter) {
-    return sendViaSmtp({ transporter: smtpTransporter, recipient, subject, htmlContent });
+  if (smtpTransporters.length > 0) {
+    return sendViaSmtp({ transporters: smtpTransporters, recipient, subject, htmlContent });
   }
 
   throw new Error(

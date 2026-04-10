@@ -17,7 +17,18 @@ const express = require('express')
 const app = express()
 const cors = require('cors')
 
-const allowedOrigins = String(
+const normalizeOrigin = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+  } catch {
+    return raw.replace(/\/+$/, "").toLowerCase();
+  }
+};
+
+const configuredOriginsRaw = String(
   process.env.CORS_ORIGIN ||
     "http://localhost:5173,https://e-auction-e617.vercel.app"
 )
@@ -25,10 +36,50 @@ const allowedOrigins = String(
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+const allowAllOrigins = configuredOriginsRaw.includes("*");
+
+const allowedOriginSet = new Set(
+  configuredOriginsRaw
+    .filter((origin) => origin !== "*")
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean)
+);
+
+const originRegexSources = String(process.env.CORS_ORIGIN_REGEX || "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const defaultOriginRegexes = [
+  /^http:\/\/localhost(?::\d+)?$/i,
+  /^https:\/\/e-auction-e617.*\.vercel\.app$/i,
+  /^https:\/\/e-auction-e617\.vercel\.app$/i,
+];
+
+const configuredOriginRegexes = originRegexSources.map((pattern) => {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    console.warn(`[cors] Invalid CORS_ORIGIN_REGEX pattern ignored: ${pattern}`);
+    return null;
+  }
+}).filter(Boolean);
+
+const allowedOriginRegexes = [...defaultOriginRegexes, ...configuredOriginRegexes];
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // non-browser clients
+  if (allowAllOrigins) return true;
+
+  const normalized = normalizeOrigin(origin);
+  if (allowedOriginSet.has(normalized)) return true;
+
+  return allowedOriginRegexes.some((regex) => regex.test(normalized));
+};
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser clients (no Origin header) and configured browser origins.
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
     return callback(new Error(`Origin not allowed by CORS: ${origin}`));
