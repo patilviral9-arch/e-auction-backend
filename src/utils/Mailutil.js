@@ -30,10 +30,18 @@ const getTransportConfigs = () => {
             secure: false, // 🟢 Must be false for port 587 (STARTTLS)
             family: 4,     // 🟢 CRITICAL: This stops the ENETUNREACH error
             auth: { user, pass },
-            connectionTimeout: 40000, 
-            greetingTimeout: 40000,
-            socketTimeout: 60000,
-        }
+            connectionTimeout: MAIL_CONNECTION_TIMEOUT_MS,
+            greetingTimeout: MAIL_GREETING_TIMEOUT_MS,
+            socketTimeout: MAIL_SOCKET_TIMEOUT_MS,
+        },
+        {
+            service: "gmail",
+            family: 4,
+            auth: { user, pass },
+            connectionTimeout: MAIL_CONNECTION_TIMEOUT_MS,
+            greetingTimeout: MAIL_GREETING_TIMEOUT_MS,
+            socketTimeout: MAIL_SOCKET_TIMEOUT_MS,
+        },
     ];
 };
 
