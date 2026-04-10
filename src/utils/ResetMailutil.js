@@ -26,7 +26,9 @@ const sendResetMail = async (to, resetUrl) => {
   }
 
   const transporter = mailer.createTransport({
-    service: "gmail",
+    host: "smtp.gmail.com",  // explicit host instead of service: "gmail"
+    port: 587,               // 587 (TLS) is more reliable than 465 on restricted hosts
+    secure: false,  
     family: 4,
     connectionTimeout: 25000,
     auth: {
