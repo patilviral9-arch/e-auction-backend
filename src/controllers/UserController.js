@@ -76,7 +76,11 @@ const sendOtp = async (req, res) => {
         const lower = errorText.toLowerCase();
         const timedOut = lower.includes("timed out");
         const authError = lower.includes("invalid login") || lower.includes("authentication") || lower.includes("auth");
-        const configError = lower.includes("email credentials are missing");
+        const configError =
+            lower.includes("email credentials are missing") ||
+            lower.includes("resend_api_key") ||
+            lower.includes("email sender is missing") ||
+            lower.includes("resend api error");
 
         const status = timedOut ? 504 : authError || configError ? 500 : 500;
         const message = timedOut
