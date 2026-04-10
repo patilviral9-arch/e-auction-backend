@@ -5,6 +5,13 @@ const { generateAuctionEmail, resetEmailTemplate, generateOtpEmail } = require("
 
 const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const parseAddressEmail = (value) => {
+  const text = String(value || "").trim();
+  const bracketMatch = text.match(/<([^>]+)>/);
+  return String(bracketMatch ? bracketMatch[1] : text).trim().toLowerCase();
+};
+const isConsumerMailboxDomain = (value) =>
+  /@(gmail\.com|yahoo\.com|outlook\.com|hotmail\.com|live\.com|icloud\.com)$/i.test(value);
 const EMAIL_SEND_TIMEOUT_MS = Number(process.env.EMAIL_SEND_TIMEOUT_MS || 45000);
 
 const withTimeout = (promise, ms, label = "Email send") =>
@@ -32,15 +39,28 @@ const getResendClient = () => {
 const getFromAddress = () => {
   const explicitFrom = String(process.env.EMAIL_FROM || "").trim();
   if (explicitFrom) {
+    const fromEmail = parseAddressEmail(explicitFrom);
+    if (!isValidEmail(fromEmail)) {
+      throw new Error("EMAIL_FROM is invalid. Use format: E-Auction <noreply@yourdomain.com>");
+    }
+    if (isConsumerMailboxDomain(fromEmail)) {
+      throw new Error(
+        "EMAIL_FROM must use your own verified domain in Resend (gmail/outlook/yahoo are not allowed)."
+      );
+    }
     return explicitFrom;
   }
 
-  const fallbackEmail = String(process.env.EMAIL_USER || "").trim();
-  if (fallbackEmail && isValidEmail(fallbackEmail)) {
-    return `"E-Auction" <${fallbackEmail}>`;
+  const useDevFrom = String(process.env.RESEND_USE_DEV_FROM || "")
+    .trim()
+    .toLowerCase() === "true";
+  if (useDevFrom) {
+    return '"E-Auction" <onboarding@resend.dev>';
   }
 
-  throw new Error("Email sender is missing. Set EMAIL_FROM in backend .env");
+  throw new Error(
+    "Email sender is missing. Set EMAIL_FROM with a verified domain, or set RESEND_USE_DEV_FROM=true for local testing."
+  );
 };
 
 const pickHtmlTemplate = (content, type) => {

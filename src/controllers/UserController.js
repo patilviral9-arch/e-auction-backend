@@ -3,15 +3,17 @@ const bcrypt       = require("bcrypt");
 const mailSend     = require('../utils/Mailutil');
 const sendResetMail = require('../utils/ResetMailutil');
 const jwt          = require("jsonwebtoken");
+const { generateSecret, generateURI, verify } = require("otplib");
 const secret       = process.env.JWT_SECRET_KEY;
 
-// ── In-memory OTP store  { email → { otp, expiresAt } } ─────────────────────
+// In-memory TOTP setup store { email -> { secretKey, expiresAt } }
 // For production swap this with Redis or a DB collection
-const otpStore = new Map();
+const pendingTotpStore = new Map();
 const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 600000);
+const TOTP_SETUP_TTL_MS = Number(process.env.TOTP_SETUP_TTL_MS || 10 * 60 * 1000);
 const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 60000);
+const TOTP_ISSUER = String(process.env.TOTP_ISSUER || "E-Auction").trim() || "E-Auction";
 
 const withTimeout = (promise, ms, label = "Operation") =>
     new Promise((resolve, reject) => {
@@ -30,12 +32,11 @@ const withTimeout = (promise, ms, label = "Operation") =>
             });
     });
 
-// ── Helper: generate a 6-digit OTP ───────────────────────────────────────────
-const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+// TOTP helpers
 
 // ── POST /user/send-otp ───────────────────────────────────────────────────────
-// Called by Signup before showing the OTP modal.
-// Generates a fresh OTP, stores it for 10 minutes, and emails it.
+// Called by Signup before showing the authenticator-code prompt.
+// Generates a TOTP setup secret and returns provisioning details.
 const sendOtp = async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     if (!email) return res.status(400).json({ message: "Email is required." });
@@ -56,74 +57,76 @@ const sendOtp = async (req, res) => {
             console.warn("[sendOtp] User lookup skipped:", lookupErr.message);
         }
 
-        const otp       = generateOtp();
-        const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+        const secretKey = generateSecret();
+        const expiresAt = Date.now() + TOTP_SETUP_TTL_MS;
+        const otpauthUrl = generateURI({
+            issuer: TOTP_ISSUER,
+            label: email,
+            secret: secretKey,
+        });
 
-        otpStore.set(email, { otp, expiresAt });
+        pendingTotpStore.set(email, { secretKey, expiresAt });
 
-        // Send the OTP email using your existing Mailutil
-        // Pass type "otp" — add a matching template to Mailutil (see note below)
-        await withTimeout(
-            mailSend(email, "Your E-Auction Verification Code", otp, "otp"),
-            OTP_EMAIL_TIMEOUT_MS,
-            "OTP email send"
-        );
-
-        res.status(200).json({ message: "OTP sent successfully." });
+        res.status(200).json({
+            message: "Authenticator setup generated successfully.",
+            totpSetup: {
+                issuer: TOTP_ISSUER,
+                accountName: email,
+                manualEntryKey: secretKey,
+                otpauthUrl,
+                expiresInSeconds: Math.floor(TOTP_SETUP_TTL_MS / 1000),
+            },
+        });
     } catch (err) {
         console.error("sendOtp error:", err);
-        const errorText = String(err?.message || "");
-        const lower = errorText.toLowerCase();
-        const timedOut = lower.includes("timed out");
-        const authError = lower.includes("invalid login") || lower.includes("authentication") || lower.includes("auth");
-        const configError =
-            lower.includes("email credentials are missing") ||
-            lower.includes("resend_api_key") ||
-            lower.includes("email sender is missing") ||
-            lower.includes("resend api error");
-
-        const status = timedOut ? 504 : authError || configError ? 500 : 500;
-        const message = timedOut
-            ? "OTP service timed out. Please try again."
-            : authError
-                ? "OTP email configuration/auth failed."
-                : configError
-                    ? "Backend email credentials are not configured."
-                    : "Failed to send OTP.";
-
-        res.status(status).json({ message, err: errorText });
+        res.status(500).json({
+            message: "Failed to generate authenticator setup.",
+            err: String(err?.message || err),
+        });
     }
 };
 
 // ── POST /user/verify-otp ─────────────────────────────────────────────────────
-// Called by the OTP modal before registering the user.
+// Called by Signup before registering the user.
 // Returns 200 if valid, 400/410 if wrong or expired.
-const verifyOtp = (req, res) => {
+const verifyOtp = async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const otp = String(req.body?.otp || "").trim();
     if (!email || !otp) {
         return res.status(400).json({ message: "Email and OTP are required." });
     }
 
-    const record = otpStore.get(email);
+    if (!/^\d{6}$/.test(otp)) {
+        return res.status(400).json({ message: "Enter a valid 6-digit authenticator code." });
+    }
 
+    const record = pendingTotpStore.get(email);
     if (!record) {
-        return res.status(400).json({ message: "No OTP found for this email. Please request a new one." });
+        return res.status(400).json({ message: "No authenticator setup found for this email. Please start again." });
     }
 
     if (Date.now() > record.expiresAt) {
-        otpStore.delete(email);
-        return res.status(410).json({ message: "OTP has expired. Please request a new one." });
+        pendingTotpStore.delete(email);
+        return res.status(410).json({ message: "Authenticator setup has expired. Please start again." });
     }
 
-    if (record.otp !== otp) {
-        return res.status(400).json({ message: "Incorrect OTP. Please try again." });
+    try {
+        const verification = await verify({
+            secret: record.secretKey,
+            token: otp,
+            window: 1,
+        });
+
+        if (!verification?.valid) {
+            return res.status(400).json({ message: "Incorrect authenticator code. Please try again." });
+        }
+
+        pendingTotpStore.delete(email);
+        res.status(200).json({ message: "Authenticator code verified successfully." });
+    } catch (err) {
+        console.error("verifyOtp error:", err);
+        res.status(500).json({ message: "Failed to verify authenticator code." });
     }
-
-    // OTP is valid — remove it so it can't be reused
-    otpStore.delete(email);
-
-    res.status(200).json({ message: "OTP verified successfully." });
 };
 
 // ── POST /user/register ───────────────────────────────────────────────────────
