@@ -1,95 +1,54 @@
-const mailer = require("nodemailer")
-require("dotenv").config()
-
-const { generateAuctionEmail, resetEmailTemplate, generateOtpEmail } = require("./EmailTemplates")
-
-const getMailConfig = () => {
-    const user = String(process.env.EMAIL_USER || "").trim();
-    const pass = String(process.env.EMAIL_PASSWORD || "").replace(/\s+/g, "");
-
-    if (!user || !pass) {
-        throw new Error("Email credentials are missing. Set EMAIL_USER and EMAIL_PASSWORD in backend .env");
-    }
-
-    return { user, pass };
-};
+const { Resend } = require("resend");
+const mailer = require("nodemailer");
+require("dotenv").config();
+const { generateAuctionEmail, resetEmailTemplate, generateOtpEmail } = require("./EmailTemplates");
 
 const normalizeRecipient = (to) => String(to || "").trim().toLowerCase();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const MAIL_CONNECTION_TIMEOUT_MS = Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 30000);
-const MAIL_GREETING_TIMEOUT_MS = Number(process.env.MAIL_GREETING_TIMEOUT_MS || 30000);
-const MAIL_SOCKET_TIMEOUT_MS = Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 45000);
 
-const getTransportConfigs = () => {
-    const { user, pass } = getMailConfig();
-    
-    return [
-        {
-            host: "smtp.gmail.com",
-            port: 587,
-            secure: false, // 🟢 Must be false for port 587 (STARTTLS)
-            family: 4,     // 🟢 CRITICAL: This stops the ENETUNREACH error
-            auth: { user, pass },
-            connectionTimeout: 40000, 
-            greetingTimeout: 40000,
-            socketTimeout: 60000,
-        }
-    ];
+const mailSend = async (to, subject, content, type) => {
+  const user = process.env.BREVO_USER;
+  const pass = process.env.BREVO_PASS;
+
+  if (!user || !pass) {
+    throw new Error("Brevo credentials missing. Set BREVO_USER and BREVO_PASS in environment variables.");
+  }
+
+  const recipient = normalizeRecipient(to);
+  if (!isValidEmail(recipient)) {
+    throw new Error(`Invalid recipient email: ${to}`);
+  }
+
+  let htmlContent;
+  if (type === "otp") {
+    htmlContent = generateOtpEmail(content);
+  } else if (type === "reset") {
+    htmlContent = resetEmailTemplate(content);
+  } else {
+    htmlContent = generateAuctionEmail(content);
+  }
+
+  const transporter = mailer.createTransport({
+    host: "smtp-relay.brevo.com",
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+  });
+
+  try {
+    const mailResponse = await transporter.sendMail({
+      from: `"E-Auction" <${user}>`,
+      to: recipient,
+      subject,
+      html: htmlContent,
+    });
+
+    console.log("Email Sent ID:", mailResponse.messageId);
+    return mailResponse;
+  } catch (error) {
+    console.error("Mail Error:", error.message);
+    throw error;
+  }
 };
 
-// mailSend(to, subject, content, type)
-// type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
-const mailSend = async (to, subject, content, type) => {
-    const { user } = getMailConfig();
-    const recipient = normalizeRecipient(to);
-
-    if (!isValidEmail(recipient)) {
-        throw new Error(`Invalid recipient email: ${to}`);
-    }
-
-    let htmlContent;
-
-    if (type === "otp") {
-        // content = the 6-digit OTP string
-        htmlContent = generateOtpEmail(content);
-    } else if (type === "reset") {
-        // content = the reset URL
-        htmlContent = resetEmailTemplate(content);
-    } else {
-        // default: welcome email — content = userName
-        htmlContent = generateAuctionEmail(content);
-    }
-
-    const mailOptions = {
-        from: `"E-Auction" <${user}>`,
-        to: recipient,
-        subject,
-        html: htmlContent
-    }
-
-    const transportConfigs = getTransportConfigs();
-    const failures = [];
-
-    for (const config of transportConfigs) {
-        const transporter = mailer.createTransport(config);
-        try {
-            const mailResponse = await transporter.sendMail(mailOptions);
-            if (!Array.isArray(mailResponse.accepted) || mailResponse.accepted.length === 0) {
-                const rejected = Array.isArray(mailResponse.rejected) ? mailResponse.rejected.join(", ") : "unknown";
-                throw new Error(`Email not accepted by SMTP server. Rejected: ${rejected}`);
-            }
-            console.log("Email Sent ID:", mailResponse.messageId);
-            return mailResponse;
-        } catch (error) {
-            const transportLabel = config.service
-                ? `service:${config.service}`
-                : `${config.host}:${config.port}${config.secure ? " (ssl)" : ""}`;
-            failures.push(`${transportLabel} -> ${error.message}`);
-            console.error("Nodemailer Error:", transportLabel, error.message);
-        }
-    }
-
-    throw new Error(`All mail transports failed. ${failures.join(" | ")}`);
-}
-
-module.exports = mailSend
+module.exports = mailSend;
