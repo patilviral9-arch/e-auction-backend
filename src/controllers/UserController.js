@@ -3,17 +3,17 @@ const bcrypt       = require("bcrypt");
 const mailSend     = require('../utils/Mailutil');
 const sendResetMail = require('../utils/ResetMailutil');
 const jwt          = require("jsonwebtoken");
-const { generateSecret, generateURI, verify } = require("otplib");
 const secret       = process.env.JWT_SECRET_KEY;
 
-// In-memory TOTP setup store { email -> { secretKey, expiresAt } }
+// In-memory OTP store { email -> { otp, expiresAt } }
 // For production swap this with Redis or a DB collection
-const pendingTotpStore = new Map();
+const otpStore = new Map();
 const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const TOTP_SETUP_TTL_MS = Number(process.env.TOTP_SETUP_TTL_MS || 10 * 60 * 1000);
+const OTP_TTL_MS = Number(process.env.TEST_OTP_TTL_MS || 10 * 60 * 1000);
 const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 60000);
-const TOTP_ISSUER = String(process.env.TOTP_ISSUER || "E-Auction").trim() || "E-Auction";
+const TEST_OTP_MODE = String(process.env.TEST_OTP_MODE || "true").toLowerCase() === "true";
+const TEST_OTP_CODE = String(process.env.TEST_OTP_CODE || "123456").trim();
 
 const withTimeout = (promise, ms, label = "Operation") =>
     new Promise((resolve, reject) => {
@@ -32,11 +32,11 @@ const withTimeout = (promise, ms, label = "Operation") =>
             });
     });
 
-// TOTP helpers
+// OTP helpers
 
 // ── POST /user/send-otp ───────────────────────────────────────────────────────
-// Called by Signup before showing the authenticator-code prompt.
-// Generates a TOTP setup secret and returns provisioning details.
+// Called by Signup before showing the OTP prompt.
+// Development mode: fixed OTP is returned, no real send.
 const sendOtp = async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     if (!email) return res.status(400).json({ message: "Email is required." });
@@ -57,30 +57,27 @@ const sendOtp = async (req, res) => {
             console.warn("[sendOtp] User lookup skipped:", lookupErr.message);
         }
 
-        const secretKey = generateSecret();
-        const expiresAt = Date.now() + TOTP_SETUP_TTL_MS;
-        const otpauthUrl = generateURI({
-            issuer: TOTP_ISSUER,
-            label: email,
-            secret: secretKey,
-        });
+        const otp = TEST_OTP_CODE;
+        const expiresAt = Date.now() + OTP_TTL_MS;
+        otpStore.set(email, { otp, expiresAt });
 
-        pendingTotpStore.set(email, { secretKey, expiresAt });
+        const response = {
+            message: TEST_OTP_MODE
+                ? "Test OTP generated successfully (development mode)."
+                : "OTP generated successfully.",
+            testMode: TEST_OTP_MODE,
+            expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
+        };
 
-        res.status(200).json({
-            message: "Authenticator setup generated successfully.",
-            totpSetup: {
-                issuer: TOTP_ISSUER,
-                accountName: email,
-                manualEntryKey: secretKey,
-                otpauthUrl,
-                expiresInSeconds: Math.floor(TOTP_SETUP_TTL_MS / 1000),
-            },
-        });
+        if (TEST_OTP_MODE) {
+            response.testOtp = otp;
+        }
+
+        res.status(200).json(response);
     } catch (err) {
         console.error("sendOtp error:", err);
         res.status(500).json({
-            message: "Failed to generate authenticator setup.",
+            message: "Failed to generate OTP.",
             err: String(err?.message || err),
         });
     }
@@ -89,7 +86,7 @@ const sendOtp = async (req, res) => {
 // ── POST /user/verify-otp ─────────────────────────────────────────────────────
 // Called by Signup before registering the user.
 // Returns 200 if valid, 400/410 if wrong or expired.
-const verifyOtp = async (req, res) => {
+const verifyOtp = (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const otp = String(req.body?.otp || "").trim();
     if (!email || !otp) {
@@ -97,36 +94,25 @@ const verifyOtp = async (req, res) => {
     }
 
     if (!/^\d{6}$/.test(otp)) {
-        return res.status(400).json({ message: "Enter a valid 6-digit authenticator code." });
+        return res.status(400).json({ message: "Enter a valid 6-digit OTP." });
     }
 
-    const record = pendingTotpStore.get(email);
+    const record = otpStore.get(email);
     if (!record) {
-        return res.status(400).json({ message: "No authenticator setup found for this email. Please start again." });
+        return res.status(400).json({ message: "No OTP found for this email. Please request a new one." });
     }
 
     if (Date.now() > record.expiresAt) {
-        pendingTotpStore.delete(email);
-        return res.status(410).json({ message: "Authenticator setup has expired. Please start again." });
+        otpStore.delete(email);
+        return res.status(410).json({ message: "OTP has expired. Please request a new one." });
     }
 
-    try {
-        const verification = await verify({
-            secret: record.secretKey,
-            token: otp,
-            window: 1,
-        });
-
-        if (!verification?.valid) {
-            return res.status(400).json({ message: "Incorrect authenticator code. Please try again." });
-        }
-
-        pendingTotpStore.delete(email);
-        res.status(200).json({ message: "Authenticator code verified successfully." });
-    } catch (err) {
-        console.error("verifyOtp error:", err);
-        res.status(500).json({ message: "Failed to verify authenticator code." });
+    if (record.otp !== otp) {
+        return res.status(400).json({ message: "Incorrect OTP. Please try again." });
     }
+
+    otpStore.delete(email);
+    res.status(200).json({ message: "OTP verified successfully." });
 };
 
 // ── POST /user/register ───────────────────────────────────────────────────────
