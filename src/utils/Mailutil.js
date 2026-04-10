@@ -74,6 +74,16 @@ const pickHtmlTemplate = (content, type) => {
   return generateAuctionEmail(content);
 };
 
+const shouldFallbackToSmtp = (message) => {
+  const text = String(message || "").toLowerCase();
+  return (
+    text.includes("you can only send testing emails") ||
+    text.includes("only send testing emails to your own email address") ||
+    text.includes("verify a domain") ||
+    text.includes("resend.com/domains")
+  );
+};
+
 const getSmtpTransporter = () => {
   const user = String(process.env.EMAIL_USER || "").trim();
   const pass = String(process.env.EMAIL_PASSWORD || "").trim();
@@ -88,6 +98,23 @@ const getSmtpTransporter = () => {
   });
 };
 
+const sendViaSmtp = async ({ transporter, recipient, subject, htmlContent }) => {
+  const smtpUser = String(process.env.EMAIL_USER || "").trim();
+  const from = String(process.env.EMAIL_FROM || "").trim() || `"E-Auction" <${smtpUser}>`;
+  const info = await withTimeout(
+    transporter.sendMail({
+      from,
+      to: recipient,
+      subject,
+      html: htmlContent,
+    }),
+    EMAIL_SEND_TIMEOUT_MS,
+    "SMTP email send"
+  );
+  console.log("SMTP Email Sent ID:", info?.messageId || "n/a");
+  return info;
+};
+
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
 const mailSend = async (to, subject, content, type) => {
@@ -97,6 +124,7 @@ const mailSend = async (to, subject, content, type) => {
   }
 
   const htmlContent = pickHtmlTemplate(content, type);
+  const smtpTransporter = getSmtpTransporter();
   const resend = getResendClient();
   if (resend) {
     const from = getFromAddress();
@@ -107,41 +135,36 @@ const mailSend = async (to, subject, content, type) => {
       html: htmlContent,
     };
 
-    const result = await withTimeout(
-      resend.emails.send(payload),
-      EMAIL_SEND_TIMEOUT_MS,
-      "Resend email send"
-    );
+    try {
+      const result = await withTimeout(
+        resend.emails.send(payload),
+        EMAIL_SEND_TIMEOUT_MS,
+        "Resend email send"
+      );
 
-    if (result?.error) {
-      const apiError = result.error?.message || JSON.stringify(result.error);
-      throw new Error(`Resend API error: ${apiError}`);
+      if (result?.error) {
+        const apiError = result.error?.message || JSON.stringify(result.error);
+        throw new Error(`Resend API error: ${apiError}`);
+      }
+
+      if (!result?.data?.id) {
+        throw new Error("Resend did not return a message id.");
+      }
+
+      console.log("Email Sent ID:", result.data.id);
+      return result.data;
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (smtpTransporter && shouldFallbackToSmtp(msg)) {
+        console.warn("[mailSend] Resend limited in test mode; falling back to SMTP.");
+        return sendViaSmtp({ transporter: smtpTransporter, recipient, subject, htmlContent });
+      }
+      throw err;
     }
-
-    if (!result?.data?.id) {
-      throw new Error("Resend did not return a message id.");
-    }
-
-    console.log("Email Sent ID:", result.data.id);
-    return result.data;
   }
 
-  const transporter = getSmtpTransporter();
-  if (transporter) {
-    const smtpUser = String(process.env.EMAIL_USER || "").trim();
-    const from = String(process.env.EMAIL_FROM || "").trim() || `"E-Auction" <${smtpUser}>`;
-    const info = await withTimeout(
-      transporter.sendMail({
-        from,
-        to: recipient,
-        subject,
-        html: htmlContent,
-      }),
-      EMAIL_SEND_TIMEOUT_MS,
-      "SMTP email send"
-    );
-    console.log("SMTP Email Sent ID:", info?.messageId || "n/a");
-    return info;
+  if (smtpTransporter) {
+    return sendViaSmtp({ transporter: smtpTransporter, recipient, subject, htmlContent });
   }
 
   throw new Error(
