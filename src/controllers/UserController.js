@@ -10,10 +10,16 @@ const secret       = process.env.JWT_SECRET_KEY;
 const otpStore = new Map();
 const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const OTP_TTL_MS = Number(process.env.TEST_OTP_TTL_MS || 10 * 60 * 1000);
+const OTP_TTL_MS = Number(process.env.OTP_TTL_MS || 10 * 60 * 1000);
 const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 60000);
-const TEST_OTP_MODE = String(process.env.TEST_OTP_MODE || "true").toLowerCase() === "true";
-const TEST_OTP_CODE = String(process.env.TEST_OTP_CODE || "123456").trim();
+const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 60000);
+const OTP_POOL = [
+    "103842", "204713", "315904", "426195", "537286", "648377", "759468", "860559", "971640", "182731",
+    "293822", "304913", "415024", "526135", "637246", "748357", "859468", "960579", "171680", "282791",
+    "393802", "404913", "515024", "626135", "737246", "848357", "959468", "160579", "271680", "382791",
+    "493802", "504913", "615024", "726135", "837246", "948357", "159468", "260579", "371680", "482791",
+    "593802", "604913", "715024", "826135", "937246", "148357", "259468", "360579", "471680", "582791",
+];
 
 const withTimeout = (promise, ms, label = "Operation") =>
     new Promise((resolve, reject) => {
@@ -36,7 +42,7 @@ const withTimeout = (promise, ms, label = "Operation") =>
 
 // ── POST /user/send-otp ───────────────────────────────────────────────────────
 // Called by Signup before showing the OTP prompt.
-// Development mode: fixed OTP is returned, no real send.
+// Selects one OTP from a fixed 50-code pool, stores it, and emails it.
 const sendOtp = async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     if (!email) return res.status(400).json({ message: "Email is required." });
@@ -57,30 +63,32 @@ const sendOtp = async (req, res) => {
             console.warn("[sendOtp] User lookup skipped:", lookupErr.message);
         }
 
-        const otp = TEST_OTP_CODE;
+        const randomIndex = Math.floor(Math.random() * OTP_POOL.length);
+        const otp = OTP_POOL[randomIndex];
         const expiresAt = Date.now() + OTP_TTL_MS;
         otpStore.set(email, { otp, expiresAt });
 
-        const response = {
-            message: TEST_OTP_MODE
-                ? "Test OTP generated successfully (development mode)."
-                : "OTP generated successfully.",
-            testMode: TEST_OTP_MODE,
+        await withTimeout(
+            mailSend(email, "Your E-Auction Verification Code", otp, "otp"),
+            OTP_EMAIL_TIMEOUT_MS,
+            "OTP email send"
+        );
+
+        res.status(200).json({
+            message: "OTP sent to your email successfully.",
             expiresInSeconds: Math.floor(OTP_TTL_MS / 1000),
-        };
-
-        if (TEST_OTP_MODE) {
-            response.testOtp = otp;
-        }
-
-        res.status(200).json(response);
+        });
     } catch (err) {
         console.error("sendOtp error:", err);
         res.status(500).json({
-            message: "Failed to generate OTP.",
+            message: "Failed to send OTP.",
             err: String(err?.message || err),
         });
     }
+};
+
+const resendOtp = async (req, res) => {
+    return sendOtp(req, res);
 };
 
 // ── POST /user/verify-otp ─────────────────────────────────────────────────────
@@ -263,6 +271,7 @@ const resetPassword = async (req, res) => {
 
 module.exports = {
     sendOtp,
+    resendOtp,
     verifyOtp,
     registerUser,
     loginUser,

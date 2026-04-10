@@ -3,6 +3,7 @@ const userController = require("../controllers/UserController");
 
 // ── OTP (must be BEFORE /register so the flow is: send → verify → register) ──
 router.post("/send-otp",   userController.sendOtp);
+router.post("/resend-otp", userController.resendOtp);
 router.post("/verify-otp", userController.verifyOtp);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
