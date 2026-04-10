@@ -1,4 +1,5 @@
 const { Resend } = require("resend");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const { generateAuctionEmail, resetEmailTemplate, generateOtpEmail } = require("./EmailTemplates");
@@ -31,7 +32,7 @@ const withTimeout = (promise, ms, label = "Email send") =>
 const getResendClient = () => {
   const apiKey = String(process.env.RESEND_API_KEY || "").trim();
   if (!apiKey) {
-    throw new Error("Email credentials are missing. Set RESEND_API_KEY in backend .env");
+    return null;
   }
   return new Resend(apiKey);
 };
@@ -51,7 +52,7 @@ const getFromAddress = () => {
     return explicitFrom;
   }
 
-  const useDevFrom = String(process.env.RESEND_USE_DEV_FROM || "")
+  const useDevFrom = String(process.env.RESEND_USE_DEV_FROM || "true")
     .trim()
     .toLowerCase() === "true";
   if (useDevFrom) {
@@ -73,6 +74,20 @@ const pickHtmlTemplate = (content, type) => {
   return generateAuctionEmail(content);
 };
 
+const getSmtpTransporter = () => {
+  const user = String(process.env.EMAIL_USER || "").trim();
+  const pass = String(process.env.EMAIL_PASSWORD || "").trim();
+  if (!user || !pass) return null;
+
+  return nodemailer.createTransport({
+    service: String(process.env.SMTP_SERVICE || "gmail").trim(),
+    auth: { user, pass },
+    connectionTimeout: Number(process.env.MAIL_CONNECTION_TIMEOUT_MS || 120000),
+    greetingTimeout: Number(process.env.MAIL_GREETING_TIMEOUT_MS || 120000),
+    socketTimeout: Number(process.env.MAIL_SOCKET_TIMEOUT_MS || 300000),
+  });
+};
+
 // mailSend(to, subject, content, type)
 // type: "welcome" | "otp" | "reset" | undefined (defaults to welcome)
 const mailSend = async (to, subject, content, type) => {
@@ -81,34 +96,57 @@ const mailSend = async (to, subject, content, type) => {
     throw new Error(`Invalid recipient email: ${to}`);
   }
 
-  const resend = getResendClient();
   const htmlContent = pickHtmlTemplate(content, type);
-  const from = getFromAddress();
+  const resend = getResendClient();
+  if (resend) {
+    const from = getFromAddress();
+    const payload = {
+      from,
+      to: [recipient],
+      subject,
+      html: htmlContent,
+    };
 
-  const payload = {
-    from,
-    to: [recipient],
-    subject,
-    html: htmlContent,
-  };
+    const result = await withTimeout(
+      resend.emails.send(payload),
+      EMAIL_SEND_TIMEOUT_MS,
+      "Resend email send"
+    );
 
-  const result = await withTimeout(
-    resend.emails.send(payload),
-    EMAIL_SEND_TIMEOUT_MS,
-    "Resend email send"
+    if (result?.error) {
+      const apiError = result.error?.message || JSON.stringify(result.error);
+      throw new Error(`Resend API error: ${apiError}`);
+    }
+
+    if (!result?.data?.id) {
+      throw new Error("Resend did not return a message id.");
+    }
+
+    console.log("Email Sent ID:", result.data.id);
+    return result.data;
+  }
+
+  const transporter = getSmtpTransporter();
+  if (transporter) {
+    const smtpUser = String(process.env.EMAIL_USER || "").trim();
+    const from = String(process.env.EMAIL_FROM || "").trim() || `"E-Auction" <${smtpUser}>`;
+    const info = await withTimeout(
+      transporter.sendMail({
+        from,
+        to: recipient,
+        subject,
+        html: htmlContent,
+      }),
+      EMAIL_SEND_TIMEOUT_MS,
+      "SMTP email send"
+    );
+    console.log("SMTP Email Sent ID:", info?.messageId || "n/a");
+    return info;
+  }
+
+  throw new Error(
+    "Email credentials are missing. Set RESEND_API_KEY (with EMAIL_FROM/RESEND_USE_DEV_FROM) or EMAIL_USER and EMAIL_PASSWORD."
   );
-
-  if (result?.error) {
-    const apiError = result.error?.message || JSON.stringify(result.error);
-    throw new Error(`Resend API error: ${apiError}`);
-  }
-
-  if (!result?.data?.id) {
-    throw new Error("Resend did not return a message id.");
-  }
-
-  console.log("Email Sent ID:", result.data.id);
-  return result.data;
 };
 
 module.exports = mailSend;
