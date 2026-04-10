@@ -17,8 +17,30 @@ const express = require('express')
 const app = express()
 const cors = require('cors')
 
+const allowedOrigins = String(
+  process.env.CORS_ORIGIN ||
+    "http://localhost:5173,https://e-auction-e617.vercel.app"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser clients (no Origin header) and configured browser origins.
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`Origin not allowed by CORS: ${origin}`));
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
+
 app.use(express.json())
-app.use(cors())
+app.use(cors(corsOptions))
+app.options(/.*/, cors(corsOptions));
 app.use(express.urlencoded({ extended: true }));
 
 const DBconnection = require('./src/utils/DBconnection')

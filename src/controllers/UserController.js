@@ -10,8 +10,8 @@ const secret       = process.env.JWT_SECRET_KEY;
 const otpStore = new Map();
 const normalizeEmail = (value) => String(value || "").toLowerCase().trim();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 15000);
-const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 8000);
+const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 7000);
+const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 3000);
 
 const withTimeout = (promise, ms, label = "Operation") =>
     new Promise((resolve, reject) => {
