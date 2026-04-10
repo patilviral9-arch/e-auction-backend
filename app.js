@@ -1,8 +1,10 @@
+require('dotenv').config()
+
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
-// Use system DNS by default. Custom public DNS can cause long SMTP stalls
-// on networks where those resolvers are blocked.
+// Use system DNS by default. Custom DNS servers can be supplied via .env
+// DNS_SERVERS=8.8.8.8,1.1.1.1
 if (process.env.DNS_SERVERS) {
   const servers = String(process.env.DNS_SERVERS)
     .split(',')
@@ -10,8 +12,6 @@ if (process.env.DNS_SERVERS) {
     .filter(Boolean);
   if (servers.length) dns.setServers(servers);
 }
-
-require('dotenv').config()
 
 const express = require('express')
 const app = express()
