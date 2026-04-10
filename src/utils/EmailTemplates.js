@@ -1,13 +1,10 @@
-const BANNER_URL = process.env.EMAIL_BANNER_URL || "";
-const FRONTEND_URL = process.env.FRONTEND_URL || "";
-
 const generateAuctionEmail = (userName) => {
     return `
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9f9f9; padding: 20px; color: #333;">
         <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
             <tr>
                 <td style="padding: 0;">
-                    <img src="${BANNER_URL}" alt="E-Auction Banner" style="width: 100%; display: block;">
+                    <img src="${process.env.EMAIL_BANNER_URL}" alt="E-Auction Banner" style="width: 100%; display: block;">
                 </td>
             </tr>
             
@@ -19,7 +16,7 @@ const generateAuctionEmail = (userName) => {
                     </p>
                     
                     <div style="margin-top: 30px;">
-                        <a href="${FRONTEND_URL}" style="background-color: #2c3e50; color: #ffffff; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                        <a href="http://localhost:5173/" style="background-color: #2c3e50; color: #ffffff; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
                             Explore Auctions
                         </a>
                     </div>
@@ -42,12 +39,14 @@ const resetEmailTemplate = (resetUrl) => {
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9f9f9; padding: 20px; color: #333;">
         <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
             
+            <!-- Banner -->
             <tr>
                 <td style="padding: 0;">
-                    <img src="${BANNER_URL}" alt="E-Auction Banner" style="width: 100%; display: block;">
+                    <img src="${process.env.EMAIL_BANNER_URL}" alt="E-Auction Banner" style="width: 100%; display: block;">
                 </td>
             </tr>
 
+            <!-- Body -->
             <tr>
                 <td style="padding: 40px; text-align: center;">
                     <h1 style="margin: 0; color: #2c3e50; font-size: 28px;">Reset Your Password</h1>
@@ -66,12 +65,14 @@ const resetEmailTemplate = (resetUrl) => {
                         This link will expire in <strong style="color: #2c3e50;">15 minutes</strong>.
                     </p>
 
+                    <!-- Warning -->
                     <div style="margin-top: 24px; background-color: #fff8e1; border-left: 4px solid #f59e0b; border-radius: 6px; padding: 12px 16px; text-align: left;">
                         <p style="font-size: 13px; color: #92400e; margin: 0;">
                             ⚠️ If you did not request a password reset, please ignore this email — your account remains safe and no changes will be made.
                         </p>
                     </div>
 
+                    <!-- Security note -->
                     <div style="margin-top: 12px; background-color: #f0fdf4; border-left: 4px solid #22c55e; border-radius: 6px; padding: 12px 16px; text-align: left;">
                         <p style="font-size: 13px; color: #166534; margin: 0;">
                             🛡 For your security, never share this link with anyone. E-Auction support will <strong>never</strong> ask for your password or reset link.
@@ -80,6 +81,7 @@ const resetEmailTemplate = (resetUrl) => {
                 </td>
             </tr>
 
+            <!-- Footer -->
             <tr>
                 <td style="padding: 20px; background-color: #f1f1f1; text-align: center; font-size: 12px; color: #999;">
                     © 2026 E-Auction Inc. | 123 Auction Way, Tech City<br>
@@ -98,7 +100,7 @@ const generateOtpEmail = (otp) => {
         <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
             <tr>
                 <td style="padding: 0;">
-                    <img src="${BANNER_URL}" alt="E-Auction Banner" style="width: 100%; display: block;">
+                    <img src="${process.env.EMAIL_BANNER_URL}" alt="E-Auction Banner" style="width: 100%; display: block;">
                 </td>
             </tr>
             
