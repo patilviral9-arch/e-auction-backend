@@ -13,6 +13,9 @@ const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const OTP_TTL_MS = Number(process.env.OTP_TTL_MS || 10 * 60 * 1000);
 const OTP_USER_LOOKUP_TIMEOUT_MS = Number(process.env.OTP_USER_LOOKUP_TIMEOUT_MS || 60000);
 const OTP_EMAIL_TIMEOUT_MS = Number(process.env.OTP_EMAIL_TIMEOUT_MS || 60000);
+const FORGOT_PASSWORD_EMAIL_TIMEOUT_MS = Number(
+    process.env.FORGOT_PASSWORD_EMAIL_TIMEOUT_MS || 20000
+);
 const OTP_POOL = [
     "103842", "204713", "315904", "426195", "537286", "648377", "759468", "860559", "971640", "182731",
     "293822", "304913", "415024", "526135", "637246", "748357", "859468", "960579", "171680", "282791",
@@ -232,8 +235,9 @@ const getUser = async (req, res) => {
 
 // ── POST /user/forgetpassword ─────────────────────────────────────────────────
 const forgotPassword = async (req, res) => {
-    const { email } = req.body;
+    const email = normalizeEmail(req.body?.email);
     if (!email) return res.status(400).json({ message: "Email is not provided." });
+    if (!isValidEmail(email)) return res.status(400).json({ message: "Enter a valid email address." });
 
     try {
         const foundUserFromEmail = await userschema.findOne({ email });
@@ -245,13 +249,24 @@ const forgotPassword = async (req, res) => {
             { expiresIn: "15m" }
         );
 
-        const resetUrl = `https://e-auction-e617.vercel.app/resetpassword/${token}`;
-        await sendResetMail(foundUserFromEmail.email, resetUrl);
+        const frontendBase = String(
+            process.env.FRONTEND_URL || "https://e-auction-e617.vercel.app"
+        ).replace(/\/+$/, "");
+        const resetUrl = `${frontendBase}/resetpassword/${token}`;
+
+        await withTimeout(
+            sendResetMail(foundUserFromEmail.email, resetUrl),
+            FORGOT_PASSWORD_EMAIL_TIMEOUT_MS,
+            "Reset email send"
+        );
 
         res.status(200).json({ message: "Reset link has been sent to your email." });
     } catch (err) {
         console.error("Forgot password error:", err);
-        res.status(500).json({ message: "Server error.", err: err.message });
+        res.status(500).json({
+            message: "Could not send reset email right now. Please try again shortly.",
+            err: err.message,
+        });
     }
 };
 
